@@ -1,0 +1,58 @@
+# Windows build outputs
+*.exe
+*.obj
+*.pdb
+*.manifest
+*.exp
+*.ilk
+*.pdf
+*.aps
+*.crf
+*.tab
+*.bsc
+*.lastbuildstate
+*.suo
+
+# CMake generated files
+CMakeLists.txt.user
+cmake-build-debug/
+cmake-build-release/
+cmake-*.txt
+
+# Python virtual environments
+venv/
+.env
+.env.local
+.venv/
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment files
+*.env
+
+# Swap file and generated simulation artifacts
+swap.bin
+*.swp
+
+# Logs and temporary files
+*.log
+temp/
+tmp/
+*
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build artifacts
+*.exe
+*.dll
+*.so
+*.a
+```
