@@ -20,6 +20,7 @@ public:
     size_t get_page_outs() const { return page_outs; }
     size_t get_page_ins() const { return page_ins; }
     size_t get_used_slots() const { return used_slots; }
+    size_t get_capacity_pages() const { return capacity_pages; }
 
 private:
     std::string filename;
