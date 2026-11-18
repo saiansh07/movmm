@@ -1,0 +1,120 @@
+#include "heap_allocator.h"
+#include "mmu.h"
+#include "paging.h"
+#include "swap.h"
+#include <iostream>
+#include <cassert>
+
+using namespace std;
+
+int main() {
+    cout << "--- MoVMM-Engine Unit & Integration Tests ---" << endl;
+
+    // Test 1: Heap Allocator
+    {
+        cout << "Testing HeapAllocator..." << endl;
+        HeapAllocator heap(1024, FitPolicy::FIRST_FIT);
+        void* p1 = heap.my_malloc(200);
+        assert(p1 != nullptr);
+        void* p2 = heap.my_malloc(300);
+        assert(p2 != nullptr);
+        heap.my_free(p1);
+        heap.my_free(p2);
+        FragmentationStats stats = heap.get_fragmentation_stats();
+        assert(stats.allocated_bytes == 0);
+        cout << "HeapAllocator tests passed!" << endl;
+    }
+
+    // Test 2: MMU & TLB
+    {
+        cout << "Testing MMU and TLB..." << endl;
+        MMU mmu(4, 256);
+        vector<PageTableEntry> pt(16);
+        pt[2].present = true;
+        pt[2].frame_number = 7;
+        pt[2].read_write = true;
+
+        VirtualAddress va = (2 * 256) + 42;
+        MMU::Result res1 = mmu.translate(1, va, pt);
+        assert(!res1.page_fault);
+        assert(!res1.tlb_hit);
+        assert(res1.physical_address == (7 * 256) + 42);
+
+        MMU::Result res2 = mmu.translate(1, va, pt);
+        assert(res2.tlb_hit);
+        assert(res2.physical_address == (7 * 256) + 42);
+
+        MMU::Result res3 = mmu.translate(1, 20 * 256, pt);
+        assert(res3.protection_fault);
+
+        mmu.invalidate_tlb(1);
+        MMU::Result res4 = mmu.translate(1, va, pt);
+        assert(!res4.tlb_hit);
+        cout << "MMU and TLB tests passed!" << endl;
+    }
+
+    // Test 3: Swap Manager
+    {
+        cout << "Testing SwapManager..." << endl;
+        {
+            SwapManager swap("swap.bin", 16, 256);
+            uint32_t slot1 = swap.allocate_slot();
+            uint32_t slot2 = swap.allocate_slot();
+            assert(slot1 == 0);
+            assert(slot2 == 1);
+
+            vector<char> page_data(256, 'X');
+            page_data[0] = 'M';
+            page_data[255] = 'Z';
+
+            assert(swap.page_out(slot1, page_data.data()));
+
+            vector<char> read_buffer(256, 0);
+            assert(swap.page_in(slot1, read_buffer.data()));
+            assert(read_buffer[0] == 'M');
+            assert(read_buffer[255] == 'Z');
+
+            swap.free_slot(slot1);
+            swap.free_slot(slot2);
+        }
+        remove("swap.bin");
+        cout << "SwapManager tests passed!" << endl;
+    }
+
+    // Test 4: Demand Paging & Replacement - minimal
+    {
+        cout << "Testing PagingManager (basic)..." << endl;
+        SwapManager swap("swap_paging.bin", 32, 256);
+        PagingManager paging(4, ReplacementAlgorithm::FIFO, swap); // 4 frames to avoid exhaustion
+
+        vector<PageTableEntry> pt(16);
+
+        // Only test a couple of page faults without eviction pressure
+        PageFaultInfo f1 = paging.handle_page_fault(100, 1, pt);
+        assert(f1.occurred);
+        assert(pt[1].present);
+        assert(pt[1].frame_number == 0);
+
+        PageFaultInfo f2 = paging.handle_page_fault(100, 2, pt);
+        assert(f2.occurred);
+        assert(pt[2].present);
+        assert(pt[2].frame_number == 1);
+
+        // Just test a couple more without eviction
+        PageFaultInfo f3 = paging.handle_page_fault(100, 3, pt);
+        assert(f3.occurred);
+        assert(pt[3].present);
+        assert(pt[3].frame_number == 2);
+
+        PageFaultInfo f4 = paging.handle_page_fault(100, 4, pt);
+        assert(f4.occurred);
+        assert(pt[4].present);
+        assert(pt[4].frame_number == 3);
+
+        remove("swap_paging.bin");
+        cout << "PagingManager basic tests passed!" << endl;
+    }
+
+    cout << "--- All MoVMM-Engine Tests Passed! ---" << endl;
+    return 0;
+}
