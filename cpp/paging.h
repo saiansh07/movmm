@@ -12,6 +12,8 @@ struct PhysicalFrame {
     PageNumber page_number = 0;
     bool dirty = false;
     uint64_t last_used = 0;
+    // Store actual page data for read/write operations
+    std::vector<uint8_t> data;
 };
 
 class PagingManager {
@@ -26,7 +28,7 @@ public:
     PerformanceMetrics get_metrics() const { return metrics; }
 
 private:
-    FrameNumber allocate_frame(ProcessId pid, PageNumber page_num, PageFaultInfo& fault_info, std::vector<PageTableEntry>& page_table);
+    FrameNumber allocate_frame(ProcessId pid, PageNumber page_num, PageFaultInfo& fault, std::vector<PageTableEntry>& page_table);
     FrameNumber select_victim();
 
     size_t total_frames;
@@ -34,7 +36,7 @@ private:
     SwapManager& swap;
 
     std::vector<PhysicalFrame> frames;
-    std::list<FrameNumber> fifo_queue;
+    std::list<FrameNumber> fifo_queue; // For FIFO replacement
     uint64_t timer = 0;
     PerformanceMetrics metrics;
 };

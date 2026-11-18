@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <string>
 #include <vector>
+#include <memory>
 
 // 16-bit Virtual Address & Physical Memory types
 using VirtualAddress = uint16_t;

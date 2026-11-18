@@ -11,6 +11,7 @@
 #include <map>
 #include <memory>
 #include <cstdint>
+#include <unordered_map>
 
 struct EngineConfig {
     size_t ram_size_bytes = 4096;
@@ -47,6 +48,11 @@ struct EngineState {
     uint64_t total_frees = 0;
     size_t active_allocations = 0;
     size_t allocated_bytes = 0;
+
+    // Process registry
+    std::unordered_map<ProcessId, std::vector<PageTableEntry>> process_page_tables;
+
+    bool initialized = false;
 };
 
 struct EngineSnapshot {
@@ -126,6 +132,7 @@ public:
     void clear_events();
 
     EngineConfig get_config() const;
+    bool is_initialized() const;
 
 private:
     EngineConfig config_;

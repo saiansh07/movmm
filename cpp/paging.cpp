@@ -5,6 +5,10 @@ using namespace std;
 PagingManager::PagingManager(size_t total_frames, ReplacementAlgorithm algo, SwapManager& swap)
     : total_frames(total_frames), algo(algo), swap(swap) {
     frames.resize(total_frames);
+    // Initialize each frame's data storage
+    for (auto& frame : frames) {
+        frame.data.resize(256); // Default page size, will be resized if needed
+    }
 }
 
 PageFaultInfo PagingManager::handle_page_fault(ProcessId pid, PageNumber page_num, vector<PageTableEntry>& page_table) {
@@ -58,7 +62,8 @@ FrameNumber PagingManager::allocate_frame(ProcessId pid, PageNumber page_num, Pa
         // Write dirty page to swap
         if (victim.dirty) {
             uint32_t slot = swap.allocate_slot();
-            swap.page_out(slot, nullptr);
+            // Write actual frame data to swap
+            swap.page_out(slot, victim.data.data());
             fault.dirty_writeback = true;
             fault.swap_slot_used = slot;
             metrics.page_outs++;
@@ -71,6 +76,8 @@ FrameNumber PagingManager::allocate_frame(ProcessId pid, PageNumber page_num, Pa
     frames[fn].page_number = page_num;
     frames[fn].dirty = false;
     frames[fn].last_used = timer;
+    // Initialize/clear data for new page
+    frames[fn].data.assign(frames[fn].data.size(), 0);
     fifo_queue.push_back(fn);
 
     return fn;

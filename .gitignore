@@ -41,7 +41,7 @@ swap.bin
 # Logs and temporary files
 *.log
 temp/
-tmp/
+tmp/*
 *
 
 # IDE and editor files
@@ -55,4 +55,3 @@ tmp/
 *.dll
 *.so
 *.a
-```

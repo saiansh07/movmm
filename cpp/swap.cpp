@@ -6,12 +6,14 @@ using namespace std;
 SwapManager::SwapManager(const string& filename, size_t capacity_pages, size_t page_size)
     : filename(filename), capacity_pages(capacity_pages), page_size(page_size), slot_bitmap(capacity_pages, false) {
 
+    // Open in binary mode, create if doesn't exist
     file.open(filename, ios::in | ios::out | ios::binary | ios::trunc);
     if (!file.is_open()) {
         cerr << "Failed to open swap file: " << filename << endl;
         return;
     }
 
+    // Pre-allocate file size
     vector<char> zero_page(page_size, 0);
     for (size_t i = 0; i < capacity_pages; ++i) {
         file.write(zero_page.data(), page_size);
@@ -29,7 +31,13 @@ bool SwapManager::page_out(uint32_t slot, const void* data) {
     if (slot >= capacity_pages || !file.is_open()) return false;
 
     file.seekp(slot * page_size);
-    file.write(reinterpret_cast<const char*>(data), page_size);
+    if (data) {
+        file.write(reinterpret_cast<const char*>(data), page_size);
+    } else {
+        // Write zeros if no data provided
+        vector<char> zero_page(page_size, 0);
+        file.write(zero_page.data(), page_size);
+    }
 
     if (file.fail()) {
         file.clear();
@@ -63,7 +71,7 @@ uint32_t SwapManager::allocate_slot() {
             return static_cast<uint32_t>(i);
         }
     }
-    return 0xFFFFFFFF;
+    return 0xFFFFFFFF; // Full
 }
 
 void SwapManager::free_slot(uint32_t slot) {
