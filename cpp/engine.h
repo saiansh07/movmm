@@ -96,6 +96,15 @@ struct EngineSnapshot {
         size_t total_bytes_swapped = 0;
     } swap;
 
+    PagingManager::PageTables process_page_tables;
+    struct SnapshotFrame {
+        bool resident;
+        ProcessId pid;
+        PageNumber page_number;
+        bool dirty;
+    };
+    std::vector<SnapshotFrame> frames;
+    std::vector<TLBEntry> tlb_entries;
     std::vector<Event> recent_events;
 };
 

@@ -21,6 +21,7 @@ public:
     void invalidate_tlb(ProcessId pid);
     void invalidate_tlb_entry(ProcessId pid, PageNumber pn);
 
+    const std::vector<TLBEntry>& get_entries() const { return tlb; }
     PerformanceMetrics get_metrics() const { return metrics; }
 
 private:

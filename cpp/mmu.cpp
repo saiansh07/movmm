@@ -41,6 +41,15 @@ MMU::Result MMU::translate(ProcessId pid, VirtualAddress va, const vector<PageTa
 }
 
 void MMU::update_tlb(ProcessId pid, PageNumber pn, FrameNumber fn, bool dirty) {
+    if (tlb.empty()) return;
+    for (auto& entry : tlb) {
+        if (entry.valid && entry.pid == pid && entry.page_number == pn) {
+            entry.frame_number = fn;
+            entry.dirty = dirty;
+            entry.last_accessed = timer;
+            return;
+        }
+    }
     size_t victim_idx = 0;
     uint64_t min_time = timer + 1;
     for (size_t i = 0; i < tlb.size(); ++i) {

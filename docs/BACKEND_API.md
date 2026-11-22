@@ -53,7 +53,7 @@ This document describes the FastAPI backend implementation for MoVMM-Engine Phas
   - **Response**: `{"pid": int, "success": bool}`
   - **Purpose**: Create a new simulated process
 
-- **DELETE** `/api/v1/processes/{pid}`
+- **POST** `/api/v1/processes/{pid}`
   - **Path Parameter**: `pid` (int)
   - **Response**: `{"pid": int, "success": bool}`
   - **Purpose**: Terminate a simulated process and release resources
@@ -77,13 +77,13 @@ This document describes the FastAPI backend implementation for MoVMM-Engine Phas
 
 - **POST** `/api/v1/memory/read`
   - **Request**: `ReadMemoryRequest` (`pid`: int, `virtual_address`: int, `size`: int)
-  - **Response**: `{"success": bool, "bytes_read": int}`
-  - **Purpose**: Read from simulated memory with page-fault handling
+  - **Response**: `{"success": bool, "bytes_read": int, "bytes": [...]}`
+  - **Purpose**: Read from a single virtual page with page-fault handling
 
 - **POST** `/api/v1/memory/write`
   - **Request**: `WriteMemoryRequest` (`pid`: int, `virtual_address`: int, `data`: byte array)
   - **Response**: `{"success": bool, "message": string}`
-  - **Purpose**: Write to simulated memory with permissions and bounds checking
+  - **Purpose**: Write to a single virtual page with page-fault handling
 
 ### Policy Management Endpoint
 
@@ -95,7 +95,7 @@ This document describes the FastAPI backend implementation for MoVMM-Engine Phas
 ### State and Statistics Endpoints
 
 - **GET** `/api/v1/state`
-  - **Response**: Engine state snapshot (machine, heap, MMU, paging, swap)
+  - **Response**: Engine state snapshot with machine, heap, MMU and valid TLB entries, paging, swap, physical frames, process page tables, and recent events
   - **Purpose**: Get complete engine state
 
 - **GET** `/api/v1/statistics`
@@ -113,11 +113,11 @@ This document describes the FastAPI backend implementation for MoVMM-Engine Phas
 - **WS** `/ws/simulation`
 - **Purpose**: Real-time state updates and event broadcasting
 - **Features**:
-  - Client connects and receives initial state snapshot
-  - Receives state change events as they occur
+  - Clients receive `{"type":"initial_state","data":{...}}` on connection
+  - Clients receive `{"type":"state_update","data":{...}}` when a snapshot changes. Recent engine events are included in `data.events`.
   - Supports clean disconnection
   - Reports actual C++ engine state
-  - Avoids unnecessary full-state transmission for minor operations
+  - The backend polls the engine every 250 ms per connected client and skips identical snapshots.
 
 ## Python Backend Structure
 

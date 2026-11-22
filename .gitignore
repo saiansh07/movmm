@@ -55,3 +55,8 @@ tmp/*
 *.dll
 *.so
 *.a
+# Browser sources
+!frontend/
+!frontend/index.html
+!frontend/styles.css
+!frontend/app.js

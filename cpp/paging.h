@@ -5,6 +5,7 @@
 #include "swap.h"
 #include <vector>
 #include <list>
+#include <unordered_map>
 
 struct PhysicalFrame {
     bool resident = false;
@@ -18,9 +19,14 @@ struct PhysicalFrame {
 
 class PagingManager {
 public:
-    PagingManager(size_t total_frames, ReplacementAlgorithm algo, SwapManager& swap);
+    using PageTables = std::unordered_map<ProcessId, std::vector<PageTableEntry>>;
 
-    PageFaultInfo handle_page_fault(ProcessId pid, PageNumber page_num, std::vector<PageTableEntry>& page_table);
+    PagingManager(size_t total_frames, ReplacementAlgorithm algo, SwapManager& swap, size_t page_size = 256);
+
+    PageFaultInfo handle_page_fault(ProcessId pid, PageNumber page_num, std::vector<PageTableEntry>& page_table, PageTables* tables = nullptr);
+    void release_process(ProcessId pid);
+    void set_algorithm(ReplacementAlgorithm algorithm) { algo = algorithm; }
+    size_t get_replacements() const { return replacements; }
     void access_page(FrameNumber frame_num, bool is_write);
 
     std::vector<PhysicalFrame>& get_frames() { return frames; }
@@ -28,7 +34,7 @@ public:
     PerformanceMetrics get_metrics() const { return metrics; }
 
 private:
-    FrameNumber allocate_frame(ProcessId pid, PageNumber page_num, PageFaultInfo& fault, std::vector<PageTableEntry>& page_table);
+    FrameNumber allocate_frame(ProcessId pid, PageNumber page_num, PageFaultInfo& fault, std::vector<PageTableEntry>& page_table, PageTables* tables);
     FrameNumber select_victim();
 
     size_t total_frames;
@@ -38,6 +44,7 @@ private:
     std::vector<PhysicalFrame> frames;
     std::list<FrameNumber> fifo_queue; // For FIFO replacement
     uint64_t timer = 0;
+    size_t replacements = 0;
     PerformanceMetrics metrics;
 };
 

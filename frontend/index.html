@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MoVMM Engine | Memory Lab</title>
+  <link rel="stylesheet" href="/frontend/styles.css">
+  <script defer src="/frontend/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/"><span class="mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span>MoVMM<span class="brand-sub">ENGINE</span></span></a>
+    <nav aria-label="Dashboard sections"><a href="#memory">Memory map</a><a href="#translation">MMU &amp; TLB</a><a href="#history">Event log</a></nav>
+    <span id="connection" class="connection" data-status="offline" role="status">Connecting</span>
+  </header>
+
+  <main class="shell">
+    <section class="intro">
+      <div><p class="eyebrow">OPERATING SYSTEMS LAB</p><h1>Virtual Memory Lab</h1><p class="subtitle">Trace an address from a process page through the TLB, physical RAM, and swap.</p></div>
+      <button id="reset" class="secondary" type="button" data-operation>Reset engine</button>
+    </section>
+
+    <section class="metrics" aria-label="Live engine statistics">
+      <article><p>Physical RAM</p><strong id="ramMetric">&mdash;</strong><small id="ramDetail">Waiting for engine</small></article>
+      <article><p>TLB hit rate</p><strong id="tlbMetric" class="blue">&mdash;</strong><small id="tlbDetail">&mdash;</small></article>
+      <article><p>Page faults</p><strong id="faultMetric" class="orange">&mdash;</strong><small id="replacementDetail">&mdash;</small></article>
+      <article><p>Swap activity</p><strong id="swapMetric" class="purple">&mdash;</strong><small id="swapDetail">&mdash;</small></article>
+    </section>
+
+    <div class="workspace">
+      <aside aria-label="Simulation controls">
+        <section class="panel demo">
+          <p class="eyebrow">GUIDED WORKLOAD</p>
+          <h2>Run a paging demo</h2>
+          <p>Use two RAM frames to reveal TLB hits, page eviction, and dirty-page writeback.</p>
+          <div class="actions"><button id="demo" type="button" data-operation>Run demo</button><button id="step" type="button" class="secondary" data-operation>Step</button></div>
+          <p id="demoStatus" class="muted" role="status">Starting the demo resets the machine.</p>
+        </section>
+        <section class="panel">
+          <h2>Machine configuration</h2>
+          <form id="configuration">
+            <label>Page size<select name="page_size"><option>256</option><option>512</option><option>1024</option><option>2048</option><option>4096</option></select></label>
+            <label>Physical frames<input name="frames" type="number" min="1" max="256" value="16" required></label>
+            <label>TLB entries<input name="tlb_capacity" type="number" min="0" max="64" value="4" required></label>
+            <label>Swap slots<input name="swap_capacity_pages" type="number" min="0" max="4096" value="64" required></label>
+            <button class="secondary wide" type="submit" data-operation>Apply and reset</button>
+          </form>
+        </section>
+        <section class="panel">
+          <h2>Process manager</h2>
+          <label for="process">Active process</label><select id="process"><option value="">No processes</option></select>
+          <div class="actions"><button id="create" type="button" data-operation>Create</button><button id="terminate" type="button" class="secondary" data-operation>Terminate</button></div>
+        </section>
+        <section class="panel">
+          <h2>Memory access</h2>
+          <form id="access">
+            <label for="address">Virtual address</label><input id="address" name="address" value="0x0000" required spellcheck="false">
+            <label for="byte">Byte to write (0–255)</label><input id="byte" name="byte" type="number" min="0" max="255" value="42" required>
+            <div class="actions wrap"><button name="operation" value="translate" data-operation>Translate</button><button name="operation" value="read" class="secondary" data-operation>Read</button><button name="operation" value="write" class="secondary" data-operation>Write</button></div>
+          </form>
+          <output id="accessResult" class="access-result" aria-live="polite">Create a process to access memory.</output>
+        </section>
+      </aside>
+
+      <div class="content">
+        <div id="notice" class="notice" hidden role="alert"></div>
+        <section id="memory" class="panel">
+          <div class="section-head"><div><p class="eyebrow">MEMORY MAP</p><h2>Physical frames</h2></div><span id="frameSummary" class="pill">&mdash;</span></div>
+          <div class="legend"><span class="key free">Free</span><span class="key occupied">Resident</span><span class="key dirty">Dirty</span></div>
+          <div id="frames" class="map" aria-label="Physical frames"><p class="empty">Waiting for engine state.</p></div>
+        </section>
+        <section class="panel">
+          <div class="section-head"><div><p class="eyebrow">16-BIT ADDRESS SPACE</p><h2>Virtual pages</h2></div><span id="processLabel" class="pill">No process selected</span></div>
+          <div class="legend"><span class="key unused">Unmapped</span><span class="key occupied">Resident</span><span class="key swapped">In swap</span><span class="key dirty">Dirty</span></div>
+          <div id="virtualPages" class="map virtual" aria-label="Virtual address space"><p class="empty">Create a process to inspect its address space.</p></div>
+          <h3>Page table</h3>
+          <div class="scroll"><table><thead><tr><th scope="col">Page</th><th scope="col">Virtual range</th><th scope="col">State</th><th scope="col">Frame</th><th scope="col">Swap slot</th><th scope="col">Flags</th></tr></thead><tbody id="pageTable"></tbody></table></div>
+        </section>
+        <section id="translation" class="panel">
+          <div class="section-head"><div><p class="eyebrow">ADDRESS TRANSLATION</p><h2>Translation lookaside buffer</h2></div><span id="tlbSummary" class="pill">&mdash;</span></div>
+          <div class="scroll"><table><thead><tr><th scope="col">Slot</th><th scope="col">Process</th><th scope="col">Virtual page</th><th scope="col">Physical frame</th><th scope="col">Dirty</th></tr></thead><tbody id="tlbTable"></tbody></table></div>
+        </section>
+        <div class="paired">
+          <section class="panel">
+            <h2>Page replacement</h2>
+            <label for="policy">Algorithm</label><select id="policy" data-operation><option value="fifo">FIFO</option><option value="lru">LRU</option></select>
+            <p id="policyDescription" class="muted">Waiting for engine state.</p>
+          </section>
+          <section class="panel">
+            <h2>Swap space</h2>
+            <p id="swapSlots" class="muted">&mdash;</p><progress id="swapProgress" max="1" value="0" aria-label="Swap slots in use"></progress>
+            <p id="swapIO" class="muted">&mdash;</p>
+          </section>
+        </div>
+        <section class="panel">
+          <div class="section-head"><h2>Heap allocator</h2><span id="heapSummary" class="pill">&mdash;</span></div>
+          <form id="heap" class="heap-form"><label>Bytes to allocate<input name="size" type="number" min="1" max="4096" value="64" required></label><button class="secondary" data-operation>Allocate for active process</button></form>
+        </section>
+        <section id="history" class="panel">
+          <div class="section-head"><div><p class="eyebrow">ENGINE TRACE</p><h2>Execution history</h2></div><label class="filter">Filter<select id="eventFilter"><option value="all">All events</option><option value="paging">Paging</option><option value="swap">Swap</option><option value="process">Processes</option></select></label></div>
+          <div id="events" class="events"><p class="empty">No operations recorded.</p></div>
+        </section>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

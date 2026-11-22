@@ -1,3 +1,4 @@
+#include "engine.h"
 #include "heap_allocator.h"
 #include "mmu.h"
 #include "paging.h"
@@ -113,6 +114,48 @@ int main() {
 
         remove("swap_paging.bin");
         cout << "PagingManager basic tests passed!" << endl;
+    }
+
+    // Two processes share RAM. LRU must evict a dirty page and invalidate its TLB entry.
+    {
+        EngineConfig config;
+        config.page_size = 512;
+        config.ram_size_bytes = 1024;
+        Engine engine(config);
+        const auto first = engine.create_process();
+        const auto second = engine.create_process();
+        const uint8_t written = 42;
+        assert(engine.write_memory(first, 511, &written, 1));
+        assert(engine.translate_address(second, 0).page_fault);
+        assert(engine.translate_address(first, 511).tlb_hit);
+
+        assert(engine.set_replacement_policy(ReplacementAlgorithm::LRU));
+        assert(engine.translate_address(second, 512).page_fault);
+        auto snapshot = engine.get_snapshot();
+        assert(snapshot.process_page_tables.at(first).at(0).present);
+        assert(!snapshot.process_page_tables.at(second).at(0).present);
+
+        assert(engine.translate_address(second, 0).page_fault);
+        snapshot = engine.get_snapshot();
+        assert(!snapshot.process_page_tables.at(first).at(0).present);
+        assert(snapshot.process_page_tables.at(first).at(0).swap_slot == 0);
+        assert(snapshot.swap.page_outs == 1);
+        assert(snapshot.paging.replacements == 2);
+        for (const auto& entry : snapshot.tlb_entries) {
+            assert(!entry.valid || entry.pid != first);
+        }
+
+        uint8_t restored = 0;
+        assert(engine.read_memory(first, 511, &restored, 1));
+        assert(restored == written);
+        assert(engine.get_snapshot().swap.page_ins == 1);
+        assert(engine.terminate_process(first));
+        snapshot = engine.get_snapshot();
+        assert(snapshot.process_page_tables.count(first) == 0);
+        assert(snapshot.swap.used_swap_slots == 0);
+        assert(snapshot.paging.resident_pages == 1);
+        engine.reset();
+        assert(engine.get_snapshot().process_page_tables.empty());
     }
 
     cout << "--- All MoVMM-Engine Tests Passed! ---" << endl;

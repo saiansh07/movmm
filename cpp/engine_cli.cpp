@@ -139,7 +139,7 @@ int main() {
                 bool success = engine.read_memory(pid, va, buffer.data(), size);
                 response["success"] = success;
                 if (success) {
-                    response["data"] = {{"bytes_read", size}};
+                    response["data"] = {{"bytes_read", size}, {"bytes", buffer}};
                 } else {
                     response["error"] = "Read failed";
                 }
@@ -198,7 +198,6 @@ int main() {
                     {"total_blocks", snapshot.heap.total_blocks},
                     {"free_blocks", snapshot.heap.free_blocks}
                 };
-
                 // MMU state
                 data["mmu"] = {
                     {"tlb_hits", snapshot.mmu.mmu_metrics.tlb_hits},
@@ -210,6 +209,7 @@ int main() {
                 data["paging"] = {
                     {"page_faults", snapshot.paging.page_faults},
                     {"resident_pages", snapshot.paging.resident_pages},
+                    {"replacements", snapshot.paging.replacements},
                     {"fifo_enabled", snapshot.paging.fifo_enabled},
                     {"lru_enabled", snapshot.paging.lru_enabled}
                 };
@@ -220,6 +220,45 @@ int main() {
                     {"page_ins", snapshot.swap.page_ins},
                     {"used_slots", snapshot.swap.used_swap_slots}
                 };
+
+                data["machine"]["fit_policy"] = snapshot.machine.config.fit_policy == FitPolicy::BEST_FIT ? "best_fit" : "first_fit";
+                data["processes"] = json::array();
+                for (const auto& [pid, table] : snapshot.process_page_tables) {
+                    json pages = json::array();
+                    for (size_t vpn = 0; vpn < table.size(); ++vpn) {
+                        const auto& entry = table[vpn];
+                        if (!entry.valid) continue;
+                        pages.push_back({
+                            {"page", vpn}, {"present", entry.present},
+                            {"frame", entry.present ? json(entry.frame_number) : json(nullptr)},
+                            {"swap_slot", entry.swap_slot == NO_SWAP_SLOT ? json(nullptr) : json(entry.swap_slot)},
+                            {"referenced", entry.referenced}, {"dirty", entry.dirty}
+                        });
+                    }
+                    data["processes"].push_back({{"pid", pid}, {"pages", pages}});
+                }
+
+                data["frames"] = json::array();
+                for (size_t index = 0; index < snapshot.frames.size(); ++index) {
+                    const auto& frame = snapshot.frames[index];
+                    data["frames"].push_back({
+                        {"frame", index}, {"resident", frame.resident},
+                        {"pid", frame.resident ? json(frame.pid) : json(nullptr)},
+                        {"page", frame.resident ? json(frame.page_number) : json(nullptr)},
+                        {"dirty", frame.resident && frame.dirty}
+                    });
+                }
+
+                data["mmu"]["entries"] = json::array();
+                for (size_t index = 0; index < snapshot.tlb_entries.size(); ++index) {
+                    const auto& entry = snapshot.tlb_entries[index];
+                    if (entry.valid) {
+                        data["mmu"]["entries"].push_back({
+                            {"slot", index}, {"pid", entry.pid}, {"page", entry.page_number},
+                            {"frame", entry.frame_number}, {"dirty", entry.dirty}
+                        });
+                    }
+                }
 
                 // Recent events
                 json events_json = json::array();

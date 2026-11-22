@@ -1,107 +1,120 @@
 #include "paging.h"
+#include <stdexcept>
 
 using namespace std;
 
-PagingManager::PagingManager(size_t total_frames, ReplacementAlgorithm algo, SwapManager& swap)
-    : total_frames(total_frames), algo(algo), swap(swap) {
-    frames.resize(total_frames);
-    // Initialize each frame's data storage
+PagingManager::PagingManager(size_t total_frames, ReplacementAlgorithm algo, SwapManager& swap, size_t page_size)
+    : total_frames(total_frames), algo(algo), swap(swap), frames(total_frames) {
     for (auto& frame : frames) {
-        frame.data.resize(256); // Default page size, will be resized if needed
+        frame.data.resize(page_size);
     }
 }
 
-PageFaultInfo PagingManager::handle_page_fault(ProcessId pid, PageNumber page_num, vector<PageTableEntry>& page_table) {
+PageFaultInfo PagingManager::handle_page_fault(ProcessId pid, PageNumber page_num,
+                                              vector<PageTableEntry>& page_table, PageTables* tables) {
     PageFaultInfo fault;
     fault.occurred = true;
     fault.fault_page = page_num;
-    timer++;
     metrics.page_faults++;
+    fault.allocated_frame = allocate_frame(pid, page_num, fault, page_table, tables);
 
-    FrameNumber fn = allocate_frame(pid, page_num, fault, page_table);
-
-    // Update page table entry for the faulted page
-    page_table[page_num].present = true;
-    page_table[page_num].frame_number = fn;
-    page_table[page_num].valid = true;
-
+    auto& entry = page_table[page_num];
+    entry.present = true;
+    entry.frame_number = fault.allocated_frame;
+    entry.valid = true;
     return fault;
 }
 
-FrameNumber PagingManager::allocate_frame(ProcessId pid, PageNumber page_num, PageFaultInfo& fault, vector<PageTableEntry>& page_table) {
-    FrameNumber fn = 0;
-    bool found = false;
+FrameNumber PagingManager::allocate_frame(ProcessId pid, PageNumber page_num, PageFaultInfo& fault,
+                                          vector<PageTableEntry>& page_table, PageTables* tables) {
+    if (frames.empty()) throw runtime_error("No physical frames configured");
+    size_t index = 0;
+    while (index < frames.size() && frames[index].resident) ++index;
+    if (index == frames.size()) index = select_victim();
+    auto fn = static_cast<FrameNumber>(index);
+    auto& frame = frames[fn];
+    auto& incoming = page_table[page_num];
+    vector<uint8_t> data(frame.data.size(), 0);
 
-    for (size_t i = 0; i < frames.size(); ++i) {
-        if (!frames[i].resident) {
-            fn = static_cast<FrameNumber>(i);
-            found = true;
-            break;
+    if (incoming.swap_slot != NO_SWAP_SLOT) {
+        if (!swap.page_in(incoming.swap_slot, data.data())) {
+            throw runtime_error("Could not read page from swap");
         }
+        fault.page_in = true;
     }
 
-    if (!found) {
-        // Need replacement - evict a victim
-        fn = select_victim();
-        PhysicalFrame& victim = frames[fn];
-
-        // Invalidate the victim's page table entry
-        if (victim.page_number != 0 && victim.page_number != page_num && victim.page_number < page_table.size()) {
-            page_table[victim.page_number].present = false;
-            page_table[victim.page_number].valid = false;
-            page_table[victim.page_number].frame_number = 0;
-            fault.victim_selected = true;
-            fault.victim_frame = fn;
-            fault.evicted_page = victim.page_number;
-        } else {
-            fault.victim_selected = false;
-            fault.victim_frame = fn;
-            fault.evicted_page = 0;
+    if (frame.resident) {
+        PageTableEntry* victim = nullptr;
+        if (tables) {
+            victim = &tables->at(frame.pid).at(frame.page_number);
+        } else if (frame.pid == pid && frame.page_number < page_table.size()) {
+            victim = &page_table[frame.page_number];
         }
 
-        // Write dirty page to swap
-        if (victim.dirty) {
-            uint32_t slot = swap.allocate_slot();
-            // Write actual frame data to swap
-            swap.page_out(slot, victim.data.data());
+        if (frame.dirty) {
+            auto slot = victim ? victim->swap_slot : NO_SWAP_SLOT;
+            const bool new_slot = slot == NO_SWAP_SLOT;
+            if (new_slot) slot = swap.allocate_slot();
+            if (slot == NO_SWAP_SLOT) throw runtime_error("Swap space is full");
+            if (!swap.page_out(slot, frame.data.data())) {
+                if (new_slot) swap.free_slot(slot);
+                throw runtime_error("Could not write page to swap");
+            }
+            if (victim) victim->swap_slot = slot;
             fault.dirty_writeback = true;
             fault.swap_slot_used = slot;
-            metrics.page_outs++;
         }
+
+        if (victim) {
+            victim->present = false;
+            victim->referenced = false;
+            victim->dirty = false;
+        }
+
+        fault.victim_selected = true;
+        fault.victim_frame = fn;
+        fault.evicted_pid = frame.pid;
+        fault.evicted_page = frame.page_number;
+        ++replacements;
+        fifo_queue.remove(fn);
     }
 
-    // Allocate the frame
-    frames[fn].resident = true;
-    frames[fn].pid = pid;
-    frames[fn].page_number = page_num;
-    frames[fn].dirty = false;
-    frames[fn].last_used = timer;
-    // Initialize/clear data for new page
-    frames[fn].data.assign(frames[fn].data.size(), 0);
+    frame.resident = true;
+    frame.pid = pid;
+    frame.page_number = page_num;
+    frame.dirty = false;
+    frame.last_used = ++timer;
+    frame.data = std::move(data);
     fifo_queue.push_back(fn);
-
     return fn;
 }
 
 FrameNumber PagingManager::select_victim() {
-    if (algo == ReplacementAlgorithm::FIFO) {
-        while (!fifo_queue.empty()) {
-            FrameNumber victim = fifo_queue.front();
-            fifo_queue.pop_front();
-            if (frames[victim].resident) {
-                return victim;
-            }
+    if (algo == ReplacementAlgorithm::FIFO) return fifo_queue.front();
+
+    FrameNumber victim = 0;
+    uint64_t oldest = timer + 1;
+    for (size_t i = 0; i < frames.size(); ++i) {
+        if (frames[i].resident && frames[i].last_used < oldest) {
+            oldest = frames[i].last_used;
+            victim = static_cast<FrameNumber>(i);
         }
-        return 0;
-    } else {
-        FrameNumber victim = 0;
-        uint64_t oldest = timer + 1;
-        for (size_t i = 0; i < frames.size(); ++i) {
-            if (frames[i].resident && frames[i].last_used < oldest) {
-                oldest = frames[i].last_used;
-                victim = static_cast<FrameNumber>(i);
-            }
+    }
+    return victim;
+}
+
+void PagingManager::access_page(FrameNumber frame_num, bool is_write) {
+    auto& frame = frames.at(frame_num);
+    frame.last_used = ++timer;
+    frame.dirty = frame.dirty || is_write;
+}
+
+void PagingManager::release_process(ProcessId pid) {
+    for (size_t i = 0; i < frames.size(); ++i) {
+        auto& frame = frames[i];
+        if (frame.resident && frame.pid == pid) {
+            frame.resident = false;
+            fifo_queue.remove(static_cast<FrameNumber>(i));
         }
-        return victim;
     }
 }

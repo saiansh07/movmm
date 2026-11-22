@@ -16,6 +16,16 @@ Engine::Engine() : Engine(EngineConfig()) {}
 Engine::Engine(const EngineConfig& config) { initialize(config); }
 
 bool Engine::initialize(const EngineConfig& config) {
+    if (config.page_size < 256 || config.page_size > 4096 ||
+        (config.page_size & (config.page_size - 1)) != 0 ||
+        config.ram_size_bytes % config.page_size != 0 ||
+        config.ram_size_bytes / config.page_size == 0 ||
+        config.ram_size_bytes / config.page_size > 65536) {
+        throw invalid_argument("Invalid page size or physical frame count");
+    }
+    state_.paging.reset();
+    state_.swap.reset();
+    state_.process_page_tables.clear();
     config_ = config;
 
     // 1. Initialize Swap Manager first (dependencies for paging)
@@ -29,7 +39,7 @@ bool Engine::initialize(const EngineConfig& config) {
 
     // 4. Initialize Paging Manager
     size_t ram_pages = config_.ram_size_bytes / config_.page_size;
-    state_.paging = make_unique<PagingManager>(ram_pages, config_.replacement_algo, *state_.swap);
+    state_.paging = make_unique<PagingManager>(ram_pages, config_.replacement_algo, *state_.swap, config_.page_size);
 
     state_.simulation_step = 0;
     state_.next_process_id = 1;
@@ -105,35 +115,11 @@ bool Engine::terminate_process(ProcessId pid) {
         return false;
     }
 
-    // Release all resources owned by this process
-    // 1. Invalidate TLB entries for this process
-    if (state_.mmu) {
-        state_.mmu->invalidate_tlb(pid);
+    state_.mmu->invalidate_tlb(pid);
+    state_.paging->release_process(pid);
+    for (const auto& page : state_.process_page_tables.at(pid)) {
+        if (page.swap_slot != NO_SWAP_SLOT) state_.swap->free_slot(page.swap_slot);
     }
-
-    // 2. Free frames belonging to this process (evict and write back to swap if dirty)
-    if (state_.paging) {
-        auto frames = state_.paging->get_frames();
-        for (size_t i = 0; i < frames.size(); ++i) {
-            if (frames[i].resident && frames[i].pid == pid) {
-                // This frame belongs to the process being terminated
-                // Evict it - if dirty, write back to swap
-                if (frames[i].dirty) {
-                    uint32_t slot = state_.swap->allocate_slot();
-                    state_.swap->page_out(slot, nullptr); // In a real impl, we'd pass actual frame data
-                    // Note: this is a simplification - actual frame data storage would be needed
-                }
-                // Clear the frame
-                frames[i].resident = false;
-                frames[i].pid = 0;
-                frames[i].page_number = 0;
-                frames[i].dirty = false;
-                frames[i].last_used = 0;
-            }
-        }
-    }
-
-    // 3. Remove page table for this process
     state_.process_page_tables.erase(pid);
 
     state_.simulation_step++;
@@ -273,52 +259,50 @@ Engine::TranslationResult Engine::translate_address(ProcessId pid, VirtualAddres
     // Get the process's page table
     auto& page_table = it->second;
 
-    // Use MMU to translate with the process's page table
-    MMU::Result mmu_result = state_.mmu->translate(pid, va, page_table);
-    result.physical_address = mmu_result.physical_address;
-    result.tlb_hit = mmu_result.tlb_hit;
-    result.page_fault = mmu_result.page_fault;
-    result.protection_fault = mmu_result.protection_fault;
+    VirtualAddress16 addr(va, static_cast<uint16_t>(config_.page_size));
+    if (addr.page_number >= page_table.size()) page_table.resize(addr.page_number + 1);
+    const auto translated = state_.mmu->translate(pid, va, page_table);
+    result = {translated.physical_address, translated.tlb_hit, translated.page_fault, translated.protection_fault};
 
-    // Handle page fault if occurred
     if (result.page_fault) {
-        // The virtual address decomposition
-        VirtualAddress16 addr(va, static_cast<uint16_t>(config_.page_size));
-        PageNumber page_num = addr.page_number;
-
-        // Ensure page table has enough entries
-        if (page_num >= page_table.size()) {
-            page_table.resize(page_num + 1);
-        }
-
-        // Handle page fault through paging manager
-        PageFaultInfo fault = state_.paging->handle_page_fault(pid, page_num, page_table);
-
-        // If a frame was allocated, update result
+        auto fault = state_.paging->handle_page_fault(pid, addr.page_number, page_table, &state_.process_page_tables);
+        result.physical_address = fault.allocated_frame * config_.page_size + addr.offset;
         if (fault.victim_selected) {
-            // Frame was evicted - handle dirty writeback
-            // (handled in paging manager)
+            state_.mmu->invalidate_tlb_entry(fault.evicted_pid, fault.evicted_page);
         }
+        state_.mmu->update_tlb(pid, addr.page_number, fault.allocated_frame, false);
 
-        // Page table entry updated by handle_page_fault
-        // Retry translation
-        MMU::Result mmu_result2 = state_.mmu->translate(pid, va, page_table);
-        result.physical_address = mmu_result2.physical_address;
-        result.tlb_hit = mmu_result2.tlb_hit;
-        result.page_fault = mmu_result2.page_fault;
-        result.protection_fault = mmu_result2.protection_fault;
-
-        Event ev;
-        ev.event_id = event_history_.size() + 1;
-        ev.step_number = state_.simulation_step;
-        ev.event_type = "page_fault";
-        ev.process_id = static_cast<int>(pid);
-        ev.virtual_address = static_cast<int>(va);
-        ev.page_number = static_cast<int>(page_num);
-        ev.success = !fault.victim_selected || fault.allocated_frame != 0;
-        ev.explanation = "Page fault handled for page " + to_string(page_num);
-        event_history_.push_back(ev);
+        auto record = [&](const string& type, ProcessId owner, PageNumber page, FrameNumber frame,
+                          uint32_t slot, const string& explanation) {
+            Event event{};
+            event.event_id = event_history_.size() + 1;
+            event.step_number = state_.simulation_step;
+            event.event_type = type;
+            event.process_id = static_cast<int>(owner);
+            event.virtual_address = va;
+            event.page_number = page;
+            event.frame_number = frame;
+            event.swap_slot = slot;
+            event.explanation = explanation;
+            event_history_.push_back(event);
+        };
+        record("page_fault", pid, addr.page_number, fault.allocated_frame, 0, "Loaded a non-resident page");
+        if (fault.victim_selected) {
+            record("page_replaced", fault.evicted_pid, fault.evicted_page, fault.victim_frame, 0,
+                   config_.replacement_algo == ReplacementAlgorithm::LRU ? "LRU evicted a page" : "FIFO evicted a page");
+        }
+        if (fault.dirty_writeback) {
+            record("page_out", fault.evicted_pid, fault.evicted_page, fault.victim_frame,
+                   fault.swap_slot_used, "Wrote a dirty page to swap");
+        }
+        if (fault.page_in) {
+            record("page_in", pid, addr.page_number, fault.allocated_frame,
+                   page_table[addr.page_number].swap_slot, "Restored a page from swap");
+        }
     }
+    auto& page = page_table[addr.page_number];
+    page.referenced = true;
+    state_.paging->access_page(page.frame_number, false);
 
     Event ev;
     ev.event_id = event_history_.size() + 1;
@@ -338,15 +322,10 @@ Engine::TranslationResult Engine::translate_address(ProcessId pid, VirtualAddres
 bool Engine::read_memory(ProcessId pid, VirtualAddress va, void* buffer, size_t size) {
     TranslationResult result = translate_address(pid, va);
 
-    if (!result.page_fault && result.physical_address != 0) {
-        // Simulate reading from physical memory at the computed address
-        // For simplicity, we'll generate deterministic data based on address and process
-        if (buffer && size > 0) {
-            uint8_t* buf = static_cast<uint8_t*>(buffer);
-            for (size_t i = 0; i < size; ++i) {
-                buf[i] = static_cast<uint8_t>((result.physical_address + pid + i) & 0xFF);
-            }
-        }
+    const size_t offset = va % config_.page_size;
+    if (!result.protection_fault && size <= config_.page_size - offset) {
+        const auto& frame = state_.paging->get_frames().at(result.physical_address / config_.page_size);
+        if (size) memcpy(buffer, frame.data.data() + offset, size);
 
         Event ev;
         ev.event_id = event_history_.size() + 1;
@@ -367,7 +346,7 @@ bool Engine::read_memory(ProcessId pid, VirtualAddress va, void* buffer, size_t 
     ev.process_id = static_cast<int>(pid);
     ev.virtual_address = static_cast<int>(va);
     ev.success = false;
-    ev.explanation = "Read failed: page fault on VA " + to_string(va);
+    ev.explanation = "Read failed at VA " + to_string(va);
     event_history_.push_back(ev);
     return false;
 }
@@ -375,16 +354,15 @@ bool Engine::read_memory(ProcessId pid, VirtualAddress va, void* buffer, size_t 
 bool Engine::write_memory(ProcessId pid, VirtualAddress va, const void* data, size_t size) {
     TranslationResult result = translate_address(pid, va);
 
-    if (!result.page_fault && result.physical_address != 0) {
-        // Simulate writing to physical memory
-        // Mark the page as dirty in the page table
+    const size_t offset = va % config_.page_size;
+    if (!result.protection_fault && size <= config_.page_size - offset) {
         VirtualAddress16 addr(va, static_cast<uint16_t>(config_.page_size));
-        PageNumber page_num = addr.page_number;
-
-        auto it = state_.process_page_tables.find(pid);
-        if (it != state_.process_page_tables.end() && page_num < it->second.size()) {
-            it->second[page_num].dirty = true;
-        }
+        auto& page = state_.process_page_tables.at(pid)[addr.page_number];
+        auto& frame = state_.paging->get_frames().at(page.frame_number);
+        if (size) memcpy(frame.data.data() + offset, data, size);
+        page.dirty = true;
+        state_.paging->access_page(page.frame_number, true);
+        state_.mmu->update_tlb(pid, addr.page_number, page.frame_number, true);
 
         Event ev;
         ev.event_id = event_history_.size() + 1;
@@ -405,7 +383,7 @@ bool Engine::write_memory(ProcessId pid, VirtualAddress va, const void* data, si
     ev.process_id = static_cast<int>(pid);
     ev.virtual_address = static_cast<int>(va);
     ev.success = false;
-    ev.explanation = "Write failed: page fault on VA " + to_string(va);
+    ev.explanation = "Write failed at VA " + to_string(va);
     event_history_.push_back(ev);
     return false;
 }
@@ -422,8 +400,7 @@ bool Engine::set_allocation_policy(FitPolicy policy) {
 bool Engine::set_replacement_policy(ReplacementAlgorithm algo) {
     config_.replacement_algo = algo;
     if (state_.paging) {
-        size_t ram_pages = config_.ram_size_bytes / config_.page_size;
-        state_.paging = make_unique<PagingManager>(ram_pages, algo, *state_.swap);
+        state_.paging->set_algorithm(algo);
         return true;
     }
     return false;
@@ -479,7 +456,7 @@ EngineSnapshot Engine::get_snapshot() const {
         snapshot.paging.total_frames = snapshot.machine.total_frames;
         size_t resident = 0;
         if (state_.paging) {
-            auto frames = state_.paging->get_frames();
+            const auto& frames = state_.paging->get_frames();
             resident = count_if(frames.begin(), frames.end(), [](const PhysicalFrame& f) { return f.resident; });
         }
         snapshot.paging.resident_pages = resident;
@@ -496,6 +473,12 @@ EngineSnapshot Engine::get_snapshot() const {
         snapshot.swap.page_ins = state_.swap->get_page_ins();
     }
 
+    snapshot.process_page_tables = state_.process_page_tables;
+    for (const auto& frame : state_.paging->get_frames()) {
+        snapshot.frames.push_back({frame.resident, frame.pid, frame.page_number, frame.dirty});
+    }
+    snapshot.tlb_entries = state_.mmu->get_entries();
+    snapshot.paging.replacements = state_.paging->get_replacements();
     // Recent events
     snapshot.recent_events = vector<Event>(event_history_.begin(), event_history_.end());
 

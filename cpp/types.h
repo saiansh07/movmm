@@ -43,6 +43,8 @@ struct VirtualAddress16 {
     }
 };
 
+constexpr uint32_t NO_SWAP_SLOT = UINT32_MAX;
+
 struct PageTableEntry {
     bool valid = false;
     FrameNumber frame_number = 0;
@@ -50,7 +52,7 @@ struct PageTableEntry {
     bool present = false;
     bool referenced = false;
     bool dirty = false;
-    uint32_t swap_slot = 0;
+    uint32_t swap_slot = NO_SWAP_SLOT;
 };
 
 struct TLBEntry {
@@ -89,6 +91,8 @@ struct PageFaultInfo {
     bool dirty_writeback = false;
     uint32_t swap_slot_used = 0;
     PageNumber evicted_page = 0;
+    ProcessId evicted_pid = 0;
+    bool page_in = false;
 };
 
 struct SimulationConfig {

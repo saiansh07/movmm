@@ -6,7 +6,7 @@ from typing import Optional, Dict, Any
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, validator
@@ -319,7 +319,7 @@ async def read_memory(request: ReadMemoryRequest):
         response = await run_in_threadpool(proc.send_command, request.command, request.params)
 
         if response and response.get("success"):
-            return {"success": True, "bytes_read": response.get("data", {}).get("bytes_read", 0)}
+            return {"success": True, **response["data"]}
         else:
             raise HTTPException(status_code=500, detail=response.get("error", "Unknown error") if response else "No response")
     except HTTPException:
@@ -373,15 +373,7 @@ async def get_state():
         response = await run_in_threadpool(proc.send_command, "get_snapshot")
 
         if response and response.get("success"):
-            data = response.get("data", {})
-            return {
-                "success": True,
-                "machine": data.get("machine", {}),
-                "heap": data.get("heap", {}),
-                "mmu": data.get("mmu", {}),
-                "paging": data.get("paging", {}),
-                "swap": data.get("swap", {})
-            }
+            return {"success": True, **response["data"]}
         else:
             raise HTTPException(status_code=500, detail=response.get("error", "Unknown error") if response else "No response")
     except HTTPException:
@@ -468,46 +460,6 @@ async def websocket_simulation(websocket: WebSocket):
         pass
 
 
-# HTML landing page
-@app.get("/")
-async def landing_page():
-    """Minimal diagnostic landing page."""
-    return HTMLResponse(html="""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>MoVMM-Engine Phase 4</title>
-        <style>
-            body {font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px;}
-            h1 {color: #333;}
-            .endpoint {margin: 10px 0; padding: 10px; background: #f5f5f5; border-radius: 5px;}
-            a {color: #0066cc; text-decoration: none;}
-            a:hover {text-decoration: underline;}
-        </style>
-    </head>
-    <body>
-        <h1>MoVMM-Engine Phase 4</h1>
-        <p>Virtual Memory Manager FastAPI Backend</p>
-        <p>Application URL: <a href="http://127.0.0.1:8000">http://127.0.0.1:8000</a></p>
-        <p>API Documentation: <a href="http://127.0.0.1:8000/docs">http://127.0.0.1:8000/docs</a></p>
-
-        <h2>Endpoints</h2>
-        <div class="endpoint"><strong>GET</strong> <code>/api/v1/health</code> - Health check</div>
-        <div class="endpoint"><strong>POST</strong> <code>/api/v1/config</code> - Configure engine</div>
-        <div class="endpoint"><strong>POST</strong> <code>/api/v1/reset</code> - Reset engine</div>
-        <div class="endpoint"><strong>POST</strong> <code>/api/v1/processes</code> - Create process</div>
-        <div class="endpoint"><strong>DELETE</strong> <code>/api/v1/processes/{pid}</code> - Terminate process</div>
-        <div class="endpoint"><strong>POST</strong> <code>/api/v1/memory/allocate</code> - Allocate memory</div>
-        <div class="endpoint"><strong>POST</strong> <code>/api/v1/memory/free</code> - Free memory</div>
-        <div class="endpoint"><strong>POST</strong> <code>/api/v1/memory/translate</code> - Translate address</div>
-        <div class="endpoint"><strong>POST</strong> <code>/api/v1/memory/read</code> - Read memory</div>
-        <div class="endpoint"><strong>POST</strong> <code>/api/v1/memory/write</code> - Write memory</div>
-        <div class="endpoint"><strong>POST</strong> <code>/api/v1/policies</code> - Set policies</div>
-        <div class="endpoint"><strong>GET</strong> <code>/api/v1/state</code> - Get engine state</div>
-        <div class="endpoint"><strong>GET</strong> <code>/api/v1/statistics</code> - Get statistics</div>
-        <div class="endpoint"><strong>GET</strong> <code>/api/v1/events</code> - Get events</div>
-        <div class="endpoint"><strong>GET</strong> <code>/ws/simulation</code> - WebSocket updates</div>
-        <div class="endpoint"><strong>GET</strong> <code>/</code> - This landing page</div>
-    </body>
-    </html>
-    """)
+@app.get("/", include_in_schema=False)
+async def dashboard():
+    return FileResponse(frontend_path / "index.html")
