@@ -10,7 +10,7 @@ Install Python 3.14 and MinGW-w64. Add the compiler to PATH or use the default M
 .\run.ps1
 ```
 
-Open [the dashboard](http://127.0.0.1:8000/). The launcher installs Python dependencies, builds the engine when needed, and starts FastAPI. See the [Windows setup guide](docs/WINDOWS_SETUP.md) if PowerShell blocks the script.
+Open [the dashboard](http://127.0.0.1:8000/). The launcher installs Python dependencies, builds the engine when needed, and starts FastAPI. See the [Windows setup guide](WINDOWS_SETUP.md) if PowerShell blocks the script.
 
 ## Try the simulator
 
@@ -37,8 +37,9 @@ After the launcher has installed the Python dependencies, run the isolated HTTP 
 
 ## Project documentation
 
-- [Project context and requirements](docs/project/PROJECT_CONTEXT.md)
-- [Architecture](docs/project/ARCHITECTURE.md)
-- [Development status and known limits](docs/project/DEVELOPMENT_STATUS.md)
-- [Project instructions](docs/project/CLAUDE.md)
-- [Backend API](docs/BACKEND_API.md) and [engine protocol](docs/ENGINE_API.md)
+- [Project context and requirements](project/PROJECT_CONTEXT.md)
+- [Architecture](project/ARCHITECTURE.md)
+- [Development status and known limits](project/DEVELOPMENT_STATUS.md)
+- [Project instructions](../CLAUDE.md)
+- [Backend API](BACKEND_API.md) and [engine protocol](ENGINE_API.md)
+- [Agent instructions](../AGENTS.md)

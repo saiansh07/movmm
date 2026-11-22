@@ -1,11 +1,46 @@
-# Windows build outputs
+# Local environment and secrets
+.env
+.env.*
+*.env
+.envrc
+secrets/
+credentials.json
+secrets.json
+*.pem
+*.key
+*.pfx
+*.p12
+
+# Virtual environments and caches
+.venv/
+venv/
+.movmm_venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Native binaries and build outputs
+build/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+CMakeLists.txt.user
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
 *.exe
+*.dll
+*.so
+*.a
+*.lib
 *.obj
+*.o
 *.pdb
 *.manifest
 *.exp
 *.ilk
-*.pdf
 *.aps
 *.crf
 *.tab
@@ -13,56 +48,22 @@
 *.lastbuildstate
 *.suo
 
-# CMake generated files
-CMakeLists.txt.user
-cmake-build-debug/
-cmake-build-release/
-cmake-*.txt
-
-# Python virtual environments
-venv/
-.env
-.env.local
-.venv/
-
-# Python cache files
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# Environment files
-*.env
-
-# Swap file and generated simulation artifacts
+# Simulator output, logs, and temporary files
 swap.bin
-*.swp
-
-# Logs and temporary files
+swap_paging.bin
 *.log
-temp/
-tmp/*
-*
-
-# IDE and editor files
-.vscode/
-.idea/
+*.tmp
+*.temp
 *.swp
 *.swo
+temp/
+tmp/
 
-# Build artifacts
-*.exe
-*.dll
-*.so
-*.a
-# Browser sources
-!frontend/
-!frontend/index.html
-!frontend/styles.css
-!frontend/app.js
+# Local editor and agent settings
+.vscode/
+.idea/
+.claude/settings.local.json
 
-# Project documentation
-!README.md
-!docs/
-!docs/project/
-!docs/project/*.md
+# Local scratch checks superseded by cpp/tests/check_http_ws.py
+/test_e2e.py
+/test_fix.py

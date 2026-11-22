@@ -158,9 +158,11 @@ Engine control and state queries via JSON over subprocess stdin/stdout or named 
 
 ```
 movmm/
+├── CLAUDE.md              # Project instructions
+├── AGENTS.md              # Coding agent instructions
 ├── .gitignore             # Windows build outputs, Python envs, swap.bin, logs
 ├── docs/                  # Additional documentation
-│   ├── project/              # Project context, architecture, status, and instructions
+│   ├── project/              # Project context, architecture, status, and historical reports
 │   └── ...
 ├── cpp/                   # C++ engine source
 │   ├── CMakeLists.txt

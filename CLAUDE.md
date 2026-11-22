@@ -92,9 +92,9 @@ Build a modular virtual memory management framework that simulates important mem
 - Existing engine status documented
 - Architecture documented
 - CLAUDE.md exists with permanent instructions
-- PROJECT_CONTEXT.md exists
-- ARCHITECTURE.md exists
-- DEVELOPMENT_STATUS.md exists
+- docs/project/PROJECT_CONTEXT.md exists
+- docs/project/ARCHITECTURE.md exists
+- docs/project/DEVELOPMENT_STATUS.md exists
 - .gitignore is appropriate
 - Phased implementation plan is documented
 - No existing working functionality has been damaged
