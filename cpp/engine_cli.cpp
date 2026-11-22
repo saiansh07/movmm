@@ -105,11 +105,11 @@ int main() {
                     throw runtime_error("Missing pid or address parameter");
                 }
                 ProcessId pid = request["params"]["pid"].get<ProcessId>();
-                int addr = request["params"]["address"].get<int>();
-                bool success = engine.free_memory(pid, reinterpret_cast<void*>(static_cast<uintptr_t>(addr)));
+                size_t offset = request["params"]["address"].get<size_t>();
+                bool success = engine.free_heap_offset(pid, offset);
                 response["success"] = success;
                 if (!success) {
-                    response["error"] = "Free failed";
+                    response["error"] = "No allocation owned by this process at that heap offset";
                 }
             }
             else if (command == "translate") {
@@ -119,9 +119,14 @@ int main() {
                 ProcessId pid = request["params"]["pid"].get<ProcessId>();
                 VirtualAddress va = request["params"]["virtual_address"].get<VirtualAddress>();
                 auto result = engine.translate_address(pid, va);
+                const auto page_size = engine.get_config().page_size;
+                const VirtualAddress16 address(va, static_cast<uint16_t>(page_size));
                 response["success"] = true;
                 response["data"] = {
                     {"physical_address", result.physical_address},
+                    {"virtual_page", address.page_number},
+                    {"page_offset", address.offset},
+                    {"physical_frame", result.protection_fault ? json(nullptr) : json(result.physical_address / page_size)},
                     {"tlb_hit", result.tlb_hit},
                     {"page_fault", result.page_fault},
                     {"protection_fault", result.protection_fault}
@@ -196,8 +201,20 @@ int main() {
                     {"allocated_bytes", snapshot.heap.stats.allocated_bytes},
                     {"free_bytes", snapshot.heap.stats.free_bytes},
                     {"total_blocks", snapshot.heap.total_blocks},
-                    {"free_blocks", snapshot.heap.free_blocks}
+                    {"free_blocks", snapshot.heap.free_blocks},
+                    {"total_allocations", snapshot.heap.total_allocations},
+                    {"total_frees", snapshot.heap.total_frees},
+                    {"external_fragmentation_bytes", snapshot.heap.stats.external_fragmentation_bytes},
+                    {"internal_fragmentation_bytes", snapshot.heap.stats.internal_fragmentation_bytes},
+                    {"blocks", json::array()}
                 };
+                for (const auto& block : snapshot.heap.blocks) {
+                    data["heap"]["blocks"].push_back({
+                        {"offset", block.offset}, {"size", block.size},
+                        {"owner", block.owner ? json(block.owner) : json(nullptr)}
+                    });
+                }
+
                 // MMU state
                 data["mmu"] = {
                     {"tlb_hits", snapshot.mmu.mmu_metrics.tlb_hits},
@@ -282,10 +299,10 @@ int main() {
                 response["data"] = data;
             }
             else if (command == "get_statistics") {
-                // For now, return the same as get_snapshot
                 auto snapshot = engine.get_snapshot();
                 json data;
-                data["total_allocations"] = snapshot.heap.stats.allocated_bytes > 0 ? 1 : 0; // placeholder
+                data["total_allocations"] = snapshot.heap.total_allocations;
+                data["total_frees"] = snapshot.heap.total_frees;
                 data["active_allocations"] = snapshot.heap.total_blocks - snapshot.heap.free_blocks;
                 data["tlb_hit_rate"] = snapshot.mmu.mmu_metrics.tlb_hits + snapshot.mmu.mmu_metrics.tlb_misses > 0
                     ? (double)snapshot.mmu.mmu_metrics.tlb_hits / (snapshot.mmu.mmu_metrics.tlb_hits + snapshot.mmu.mmu_metrics.tlb_misses) * 100.0

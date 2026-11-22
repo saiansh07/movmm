@@ -30,7 +30,7 @@ The MoVMM-Engine C++ core communicates with the FastAPI backend via a persistent
 | `create_process` | `pid` (Process ID) | `{"pid": <int>}` |
 | `terminate_process` | `pid` (Process ID) | `{"success": true/false}` |
 | `allocate` | `pid`, `size` | `{"success": true/false}` |
-| `free` | `pid`, `address` | `{"success": true/false}` |
+| `free` | `pid`, `address` (owned heap block offset in bytes) | `{"success": true/false}` |
 | `translate` | `pid`, `virtual_address` | `{"physical_address": int, "tlb_hit": bool, "page_fault": bool, "protection_fault": bool}` |
 | `read_memory` | `pid`, `virtual_address`, `size` | `{"bytes_read": int}` |
 | `write_memory` | `pid`, `virtual_address`, `data` (array) | `{"success": true/false}` |
@@ -61,6 +61,10 @@ The MoVMM-Engine C++ core communicates with the FastAPI backend via a persistent
 - `free_bytes`: Free heap bytes
 - `total_blocks`: Total blocks
 - `free_blocks`: Free blocks
+- `blocks`: Blocks in heap order with byte `offset`, byte `size`, and `owner` PID. Free blocks have a null owner.
+- `total_allocations` and `total_frees`: Successful operations since initialization or reset. Process termination counts each block it releases.
+- `external_fragmentation_bytes`: Total free bytes minus the largest contiguous free block.
+- `internal_fragmentation_bytes`: Bytes reserved in live blocks beyond the sizes requested.
 
 ### MMU State
 - `tlb_hits`: TLB hit count

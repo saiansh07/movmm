@@ -66,7 +66,7 @@ This document describes the FastAPI backend implementation for MoVMM-Engine Phas
   - **Purpose**: Allocate memory blocks from the custom heap
 
 - **POST** `/api/v1/memory/free`
-  - **Request**: `FreeRequest` (`pid`: int, `address`: int)
+  - **Request**: `FreeRequest` with `pid` and `address`. Use the byte offset of a block owned by the process from `heap.blocks` in the current state snapshot.
   - **Response**: `{"success": bool, "message": string}`
   - **Purpose**: Free memory blocks and coalesce free lists
 
@@ -99,7 +99,7 @@ This document describes the FastAPI backend implementation for MoVMM-Engine Phas
   - **Purpose**: Get complete engine state
 
 - **GET** `/api/v1/statistics`
-  - **Response**: `{"total_allocations": int, "active_allocations": int, "tlb_hit_rate": float, "page_faults": int}`
+  - **Response**: `{"total_allocations": int, "total_frees": int, "active_allocations": int, "tlb_hit_rate": float, "page_faults": int}`
   - **Purpose**: Get engine performance statistics
 
 ### Event Endpoint

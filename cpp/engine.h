@@ -69,7 +69,15 @@ struct EngineSnapshot {
     } machine;
 
     struct SnapshotHeap {
+        struct Block {
+            size_t offset;
+            size_t size;
+            ProcessId owner;
+        };
         FragmentationStats stats;
+        std::vector<Block> blocks;
+        uint64_t total_allocations = 0;
+        uint64_t total_frees = 0;
         size_t total_blocks = 0;
         size_t free_blocks = 0;
     } heap;
@@ -121,6 +129,7 @@ public:
 
     bool allocate_memory(ProcessId pid, size_t size);
     bool free_memory(ProcessId pid, void* ptr);
+    bool free_heap_offset(ProcessId pid, size_t offset);
 
     struct TranslationResult {
         PhysicalAddress physical_address = 0;
@@ -146,6 +155,11 @@ public:
     bool is_initialized() const;
 
 private:
+    struct HeapAllocation {
+        ProcessId owner;
+        size_t requested_size;
+    };
+    std::map<size_t, HeapAllocation> heap_allocations_;
     EngineConfig config_;
     EngineState state_;
     std::vector<Event> event_history_;

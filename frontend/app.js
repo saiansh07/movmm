@@ -1,4 +1,4 @@
-"use strict";
+﻿"use strict";
 
 const byId = id => document.getElementById(id);
 const text = (id, value) => { byId(id).textContent = value; };
@@ -18,7 +18,9 @@ function syncButtons() {
   for (const control of [byId("terminate"), ...byId("access").querySelectorAll("button"), byId("heap").querySelector("button")]) {
     control.disabled ||= !processControl.value;
   }
-
+  byId("heapBlocks").querySelectorAll("button").forEach(button => {
+    button.disabled = busy || !online;
+  });
 }
 
 function connection(label, live) {
@@ -80,7 +82,34 @@ function selectProcess(pid) {
     processControl.value = pid;
   }
   renderPages();
+  renderHeap();
   syncButtons();
+}
+
+function renderHeap() {
+  const blocks = state?.heap.blocks ?? [];
+  const map = document.createDocumentFragment();
+  const rows = blocks.map(block => {
+    const range = hex(block.offset) + "–" + hex(block.offset + block.size - 1);
+    const owner = block.owner == null ? "Free" : "PID " + block.owner;
+    const segment = document.createElement("span");
+    segment.className = block.owner == null ? "free" : "occupied";
+    segment.style.flexGrow = block.size;
+    segment.title = range + " · " + owner + " · " + block.size + " B";
+    map.append(segment);
+
+    let action;
+    if (block.owner != null && String(block.owner) === processControl.value) {
+      action = document.createElement("button");
+      action.className = "secondary";
+      action.textContent = "Free";
+      action.setAttribute("aria-label", "Free heap block " + hex(block.offset));
+      action.onclick = () => perform(() => command("memory/free", {pid: block.owner, address: block.offset}));
+    }
+    return [range, block.size + " B", owner, action];
+  });
+  byId("heapMap").replaceChildren(map);
+  table("heapBlocks", rows, 4, "Waiting for engine heap blocks.");
 }
 
 function renderPages() {
@@ -161,15 +190,19 @@ function render(snapshot) {
   byId("swapProgress").value = swap.used_slots;
   text("swapIO", swap.page_outs + " page writes · " + swap.page_ins + " page reads");
   text("heapSummary", heap.allocated_bytes + " B used · " + heap.free_bytes + " B free");
+  text("heapDetails", heap.total_allocations == null ? "Heap metrics require the Phase 6 engine." :
+    heap.total_allocations + " allocations · " + heap.total_frees + " frees · " +
+    heap.external_fragmentation_bytes + " B external fragmentation · " +
+    heap.internal_fragmentation_bytes + " B internal fragmentation");
   text("frameSummary", (machine.total_frames - paging.resident_pages) + " free");
   text("tlbSummary", mmu.entries.length + " / " + mmu.tlb_capacity + " cached");
   byId("policy").value = paging.lru_enabled ? "lru" : "fifo";
   text("policyDescription", paging.lru_enabled ? "Evicts the least recently accessed page." : "Evicts the page that entered RAM first.");
 
-  const machineConfig = [machine.page_size, machine.total_frames, mmu.tlb_capacity, machine.total_swap_slots];
+  const machineConfig = [machine.page_size, machine.total_frames, mmu.tlb_capacity, machine.total_swap_slots, machine.fit_policy];
   if (machineConfig.join() !== configSignature) {
     const form = byId("configuration");
-    ["page_size", "frames", "tlb_capacity", "swap_capacity_pages"].forEach((field, index) => {
+    ["page_size", "frames", "tlb_capacity", "swap_capacity_pages", "fit_policy"].forEach((field, index) => {
       form.elements[field].value = machineConfig[index];
     });
     configSignature = machineConfig.join();
@@ -261,9 +294,11 @@ async function access(operation, pid, address, byte) {
   const result = await command("memory/" + operation, params);
   const prefix = hex(address);
   if (operation === "translate") {
-    const outcome = result.protection_fault ? "Protection fault" : hex(result.physical_address) +
+    const addressParts = "page " + result.virtual_page + " · offset " + result.page_offset;
+    const outcome = result.protection_fault ? "Protection fault" : "frame " + result.physical_frame +
+      " · physical " + hex(result.physical_address) +
       " · " + (result.tlb_hit ? "TLB hit" : "TLB miss") + (result.page_fault ? " · page fault handled" : "");
-    text("accessResult", prefix + " → " + outcome);
+    text("accessResult", prefix + " · " + addressParts + " → " + outcome);
   } else {
     text("accessResult", operation === "read" ? prefix + " → byte " + result.bytes[0] : "Wrote byte " + byte + " to " + prefix);
   }
@@ -285,7 +320,7 @@ const workload = [
 
 async function demoStep() {
   if (demoIndex === 0) {
-    await post("config", {page_size: 256, ram_size_bytes: 512, tlb_capacity: 4, swap_capacity_pages: 8, replacement_algo: byId("policy").value});
+    await post("config", {page_size: 256, ram_size_bytes: 512, tlb_capacity: 4, swap_capacity_pages: 8, fit_policy: state.machine.fit_policy, replacement_algo: byId("policy").value});
     demoPid = (await command("processes")).pid;
     text("demoStatus", "Created PID " + demoPid + " with two physical frames.");
   } else {
@@ -322,7 +357,7 @@ byId("configuration").onsubmit = event => {
       ram_size_bytes: pageSize * Number(form.get("frames")),
       tlb_capacity: Number(form.get("tlb_capacity")),
       swap_capacity_pages: Number(form.get("swap_capacity_pages")),
-      fit_policy: state.machine.fit_policy,
+      fit_policy: form.get("fit_policy"),
       replacement_algo: byId("policy").value
     });
     resetDemo();
@@ -346,5 +381,6 @@ byId("heap").onsubmit = event => {
 byId("eventFilter").onchange = renderEvents;
 table("pageTable", [], 6, "No page table to display.");
 table("tlbTable", [], 5, "No cached translations.");
+renderHeap();
 syncButtons();
 connect();

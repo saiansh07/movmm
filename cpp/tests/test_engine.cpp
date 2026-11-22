@@ -158,6 +158,41 @@ int main() {
         assert(engine.get_snapshot().process_page_tables.empty());
     }
 
+    // Heap offsets are owned by a process and return to the free list on exit.
+    {
+        Engine engine;
+        const auto first = engine.create_process();
+        const auto second = engine.create_process();
+        assert(engine.allocate_memory(first, 64));
+        assert(engine.allocate_memory(second, 128));
+        assert(engine.set_allocation_policy(FitPolicy::BEST_FIT));
+        auto heap = engine.get_snapshot().heap;
+        assert(heap.blocks.size() == 3);
+        assert(heap.blocks[0].offset == 0 && heap.blocks[0].owner == first);
+        assert(heap.blocks[1].offset == 64 && heap.blocks[1].owner == second);
+        assert(!engine.free_heap_offset(second, 0));
+        assert(!engine.free_heap_offset(first, 1));
+        assert(engine.free_heap_offset(first, 0));
+        heap = engine.get_snapshot().heap;
+        assert(heap.total_allocations == 2 && heap.total_frees == 1);
+        assert(heap.stats.external_fragmentation_bytes == 64);
+        assert(!engine.free_heap_offset(first, 0));
+        assert(engine.terminate_process(second));
+        heap = engine.get_snapshot().heap;
+        assert(heap.blocks.size() == 1);
+        assert(heap.blocks[0].owner == 0 && heap.blocks[0].size == 4096);
+        assert(engine.get_state().active_allocations == 0);
+        assert(engine.get_state().total_frees == 2);
+        engine.reset();
+        assert(!engine.free_heap_offset(first, 0));
+        const auto after_reset = engine.create_process();
+        assert(engine.allocate_memory(after_reset, 4093));
+        heap = engine.get_snapshot().heap;
+        assert(heap.total_allocations == 1 && heap.total_frees == 0);
+        assert(heap.stats.internal_fragmentation_bytes == 3);
+        cout << "Heap ownership and coalescing tests passed!" << endl;
+    }
+
     cout << "--- All MoVMM-Engine Tests Passed! ---" << endl;
     return 0;
 }

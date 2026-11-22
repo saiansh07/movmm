@@ -56,9 +56,17 @@ void* HeapAllocator::my_malloc(size_t size) {
 }
 
 void HeapAllocator::my_free(void* ptr) {
-    if (!ptr) return;
+    if (auto offset = offset_of(ptr)) free_at(*offset);
+}
 
-    size_t offset = static_cast<char*>(ptr) - static_cast<char*>(heap_start);
+optional<size_t> HeapAllocator::offset_of(const void* ptr) const {
+    const auto address = reinterpret_cast<uintptr_t>(ptr);
+    const auto base = reinterpret_cast<uintptr_t>(heap_start);
+    if (address < base || address - base >= total_size) return nullopt;
+    return address - base;
+}
+
+void HeapAllocator::free_at(size_t offset) {
     AllocationBlock* current = head;
 
     while (current) {
@@ -73,6 +81,14 @@ void HeapAllocator::my_free(void* ptr) {
         }
         current = current->next;
     }
+}
+
+vector<HeapAllocator::Block> HeapAllocator::get_blocks() const {
+    vector<Block> blocks;
+    for (const AllocationBlock* block = head; block; block = block->next) {
+        blocks.push_back({block->offset, block->size, block->free});
+    }
+    return blocks;
 }
 
 void HeapAllocator::split_block(AllocationBlock* block, size_t size) {
@@ -119,11 +135,13 @@ FragmentationStats HeapAllocator::get_fragmentation_stats() const {
 
     size_t free_blocks = 0;
     size_t allocated_blocks = 0;
+    size_t largest_free_block = 0;
 
     AllocationBlock* current = head;
     while (current) {
         if (current->free) {
             free_blocks++;
+            largest_free_block = max(largest_free_block, current->size);
         } else {
             allocated_blocks++;
         }
@@ -132,7 +150,7 @@ FragmentationStats HeapAllocator::get_fragmentation_stats() const {
 
     stats.free_blocks_count = free_blocks;
     stats.allocated_blocks_count = allocated_blocks;
-    stats.external_fragmentation_bytes = (free_blocks > 1) ? stats.free_bytes : 0;
+    stats.external_fragmentation_bytes = stats.free_bytes - largest_free_block;
 
     return stats;
 }

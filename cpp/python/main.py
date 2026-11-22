@@ -89,7 +89,7 @@ class FreeRequest(BaseModel):
     """Request for memory freeing."""
     id: str
     command: str = "free"
-    params: Dict[str, int] = Field(..., description="pid: Process ID, address: Memory address")
+    params: Dict[str, int] = Field(..., description="pid: Process ID, address: Heap block offset in bytes")
 
 class TranslateRequest(BaseModel):
     """Request for address translation."""
@@ -300,6 +300,9 @@ async def translate_address(request: TranslateRequest):
             return {
                 "success": True,
                 "physical_address": data.get("physical_address", 0),
+                "virtual_page": data.get("virtual_page"),
+                "page_offset": data.get("page_offset"),
+                "physical_frame": data.get("physical_frame"),
                 "tlb_hit": data.get("tlb_hit", False),
                 "page_fault": data.get("page_fault", False),
                 "protection_fault": data.get("protection_fault", False)
@@ -393,6 +396,7 @@ async def get_statistics():
             return {
                 "success": True,
                 "total_allocations": data.get("total_allocations", 0),
+                "total_frees": data.get("total_frees", 0),
                 "active_allocations": data.get("active_allocations", 0),
                 "tlb_hit_rate": data.get("tlb_hit_rate", 0.0),
                 "page_faults": data.get("page_faults", 0)

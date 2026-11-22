@@ -33,6 +33,7 @@ bool Engine::initialize(const EngineConfig& config) {
 
     // 2. Initialize Heap Allocator
     state_.heap = make_unique<HeapAllocator>(4096, config_.fit_policy);
+    heap_allocations_.clear();
 
     // 3. Initialize MMU with TLB
     state_.mmu = make_unique<MMU>(config_.tlb_capacity, config_.page_size);
@@ -115,6 +116,10 @@ bool Engine::terminate_process(ProcessId pid) {
         return false;
     }
 
+    for (auto entry = heap_allocations_.begin(); entry != heap_allocations_.end();) {
+        const auto allocation = entry++;
+        if (allocation->second.owner == pid) free_heap_offset(pid, allocation->first);
+    }
     state_.mmu->invalidate_tlb(pid);
     state_.paging->release_process(pid);
     for (const auto& page : state_.process_page_tables.at(pid)) {
@@ -171,14 +176,16 @@ bool Engine::allocate_memory(ProcessId pid, size_t size) {
     ev.step_number = state_.simulation_step;
     ev.event_type = "memory_allocated";
     ev.process_id = static_cast<int>(pid);
-    ev.virtual_address = success ? static_cast<int>(reinterpret_cast<uintptr_t>(ptr)) : 0;
     ev.success = success;
 
     if (success) {
+        const size_t offset = *state_.heap->offset_of(ptr);
+        heap_allocations_.emplace(offset, HeapAllocation{pid, size});
         state_.total_allocations++;
         state_.active_allocations++;
         state_.allocated_bytes += size;
-        ev.explanation = "Allocated " + to_string(size) + " bytes at address " + to_string(reinterpret_cast<uintptr_t>(ptr));
+        ev.metadata["heap_offset"] = to_string(offset);
+        ev.explanation = "Allocated " + to_string(size) + " bytes at heap offset " + to_string(offset);
     } else {
         ev.explanation = "Allocation failed: out of memory (" + to_string(size) + " bytes requested)";
     }
@@ -189,46 +196,31 @@ bool Engine::allocate_memory(ProcessId pid, size_t size) {
 }
 
 bool Engine::free_memory(ProcessId pid, void* ptr) {
-    if (!ptr) {
-        Event ev;
-        ev.event_id = event_history_.size() + 1;
-        ev.step_number = state_.simulation_step + 1;
-        ev.event_type = "memory_freed";
-        ev.process_id = static_cast<int>(pid);
-        ev.success = false;
-        ev.explanation = "Cannot free null pointer";
-        event_history_.push_back(ev);
-        return false;
-    }
+    const auto offset = state_.heap->offset_of(ptr);
+    return offset && free_heap_offset(pid, *offset);
+}
 
-    // Validate process exists
-    if (state_.process_page_tables.find(pid) == state_.process_page_tables.end()) {
-        Event ev;
-        ev.event_id = event_history_.size() + 1;
-        ev.step_number = state_.simulation_step + 1;
-        ev.event_type = "memory_freed";
-        ev.process_id = static_cast<int>(pid);
-        ev.success = false;
-        ev.explanation = "Process not found: PID " + to_string(pid);
-        event_history_.push_back(ev);
-        return false;
-    }
-
-    state_.simulation_step++;
-    state_.heap->my_free(ptr);
-
+bool Engine::free_heap_offset(ProcessId pid, size_t offset) {
+    const auto allocation = heap_allocations_.find(offset);
+    const bool owned = allocation != heap_allocations_.end() && allocation->second.owner == pid;
     Event ev;
     ev.event_id = event_history_.size() + 1;
-    ev.step_number = state_.simulation_step;
+    ev.step_number = ++state_.simulation_step;
     ev.event_type = "memory_freed";
     ev.process_id = static_cast<int>(pid);
-    ev.success = true;
-    ev.explanation = "Freed memory at address " + to_string(reinterpret_cast<uintptr_t>(ptr));
+    ev.metadata["heap_offset"] = to_string(offset);
+    ev.success = owned;
+    if (owned) {
+        state_.heap->free_at(offset);
+        state_.allocated_bytes -= allocation->second.requested_size;
+        --state_.active_allocations;
+        ++state_.total_frees;
+        heap_allocations_.erase(allocation);
+    }
+    ev.explanation = owned ? "Freed block at heap offset " + to_string(offset)
+                          : "No block owned by this process at heap offset " + to_string(offset);
     event_history_.push_back(ev);
-
-    if (state_.active_allocations > 0) state_.active_allocations--;
-    cerr << "Freed memory at address " << reinterpret_cast<uintptr_t>(ptr) << endl;
-    return true;
+    return owned;
 }
 
 Engine::TranslationResult Engine::translate_address(ProcessId pid, VirtualAddress va) {
@@ -391,7 +383,7 @@ bool Engine::write_memory(ProcessId pid, VirtualAddress va, const void* data, si
 bool Engine::set_allocation_policy(FitPolicy policy) {
     config_.fit_policy = policy;
     if (state_.heap) {
-        state_.heap = make_unique<HeapAllocator>(4096, policy);
+        state_.heap->set_policy(policy);
         return true;
     }
     return false;
@@ -439,10 +431,18 @@ EngineSnapshot Engine::get_snapshot() const {
     // Heap state
     if (state_.heap) {
         snapshot.heap.stats = state_.heap->get_fragmentation_stats();
+        snapshot.heap.stats.internal_fragmentation_bytes =
+            snapshot.heap.stats.allocated_bytes - state_.allocated_bytes;
+        snapshot.heap.total_allocations = state_.total_allocations;
+        snapshot.heap.total_frees = state_.total_frees;
         // Count actual blocks from the heap instead of hardcoding
         // We'll just use the counts from the stats
         snapshot.heap.total_blocks = snapshot.heap.stats.allocated_blocks_count + snapshot.heap.stats.free_blocks_count;
         snapshot.heap.free_blocks = snapshot.heap.stats.free_blocks_count;
+        for (const auto& block : state_.heap->get_blocks()) {
+            const ProcessId owner = block.free ? 0 : heap_allocations_.at(block.offset).owner;
+            snapshot.heap.blocks.push_back({block.offset, block.size, owner});
+        }
     }
 
     // MMU state
