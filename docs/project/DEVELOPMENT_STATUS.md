@@ -10,7 +10,7 @@
 
 ## Windows verification
 
-The native MinGW-w64 CMake build and CTest suite cover the engine subsystems and their interaction. The HTTP and WebSocket integration checks exercise live engine state, page protection, heap metrics, and a reference sequence with different FIFO and LRU results. See [Windows setup](docs/WINDOWS_SETUP.md) for commands.
+The native MinGW-w64 CMake build and CTest suite cover the engine subsystems and their interaction. The HTTP and WebSocket integration checks exercise live engine state, page protection, heap metrics, and a reference sequence with different FIFO and LRU results. See [Windows setup](../WINDOWS_SETUP.md) for commands.
 
 ## Scope and remaining verification
 

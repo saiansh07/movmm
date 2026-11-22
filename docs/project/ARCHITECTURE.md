@@ -158,13 +158,10 @@ Engine control and state queries via JSON over subprocess stdin/stdout or named 
 
 ```
 movmm/
-├── CLAUDE.md              # Permanent project context (this file)
-├── PROJECT_CONTEXT.md     # Project abstract, requirements, team responsibilities
-├── ARCHITECTURE.md        # Component diagram, interfaces, communication flow
-├── DEVELOPMENT_STATUS.md  # Completed work, current state, known issues, next task
 ├── .gitignore             # Windows build outputs, Python envs, swap.bin, logs
 ├── docs/                  # Additional documentation
-│   └── ... 
+│   ├── project/              # Project context, architecture, status, and instructions
+│   └── ...
 ├── cpp/                   # C++ engine source
 │   ├── CMakeLists.txt
 │   ├── engine.cpp         # Main engine entry point
