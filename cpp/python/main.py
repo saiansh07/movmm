@@ -1,31 +1,40 @@
 """MoVMM-Engine Phase 4 - FastAPI Backend"""
 
-import json
+from contextlib import asynccontextmanager
 import asyncio
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, validator
 
-from .config import get_engine_process, cleanup_engine, EngineProcess
+from .config import get_engine_process, cleanup_engine
 
-# Create FastAPI app
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.engine = await run_in_threadpool(get_engine_process)
+    try:
+        yield
+    finally:
+        await run_in_threadpool(cleanup_engine)
+
+
 app = FastAPI(
     title="MoVMM-Engine Phase 4 API",
     description="Virtual Memory Manager Integration",
     version="0.1.0",
+    lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc"
 )
 
-# Mount static files (future frontend)
-app.mount("/frontend", StaticFiles(directory=Path(__file__).parent.parent.parent / "frontend"), name="frontend")
+frontend_path = Path(__file__).resolve().parents[2] / "frontend"
+if frontend_path.is_dir():
+    app.mount("/frontend", StaticFiles(directory=frontend_path), name="frontend")
 
-# Engine process management
-engine_process = get_engine_process()
 
 # Pydantic models for request/response validation
 
@@ -68,43 +77,43 @@ class TerminateProcessRequest(BaseModel):
     """Request for process termination."""
     id: str
     command: str = "terminate_process"
-    params: Dict[str, int] = Field(..., description={"pid": "Process ID"})
+    params: Dict[str, int] = Field(..., description="pid: Process ID")
 
 class AllocateRequest(BaseModel):
     """Request for memory allocation."""
     id: str
     command: str = "allocate"
-    params: Dict[str, int] = Field(..., description={"pid": "Process ID", "size": "Allocation size"})
+    params: Dict[str, int] = Field(..., description="pid: Process ID, size: Allocation size")
 
 class FreeRequest(BaseModel):
     """Request for memory freeing."""
     id: str
     command: str = "free"
-    params: Dict[str, int] = Field(..., description={"pid": "Process ID", "address": "Memory address"})
+    params: Dict[str, int] = Field(..., description="pid: Process ID, address: Memory address")
 
 class TranslateRequest(BaseModel):
     """Request for address translation."""
     id: str
     command: str = "translate"
-    params: Dict[str, int] = Field(..., description={"pid": "Process ID", "virtual_address": "16-bit VA"})
+    params: Dict[str, int] = Field(..., description="pid: Process ID, virtual_address: 16-bit VA")
 
 class ReadMemoryRequest(BaseModel):
     """Request for memory read."""
     id: str
     command: str = "read_memory"
-    params: Dict[str, int] = Field(..., description={"pid": "Process ID", "virtual_address": "16-bit VA", "size": "Bytes to read"})
+    params: Dict[str, int] = Field(..., description="pid: Process ID, virtual_address: 16-bit VA, size: Bytes to read")
 
 class WriteMemoryRequest(BaseModel):
     """Request for memory write."""
     id: str
     command: str = "write_memory"
-    params: Dict[str, Any] = Field(..., description={"pid": "Process ID", "virtual_address": "16-bit VA", "data": "Byte array"})
+    params: Dict[str, Any] = Field(..., description="pid: Process ID, virtual_address: 16-bit VA, data: Byte array")
 
 class SetPolicyRequest(BaseModel):
     """Request for policy setting."""
     id: str
     command: str = "set_policy"
-    params: Dict[str, str] = Field(..., description={"policy_type": "allocation|replacement", "policy": "first_fit|best_fit|lru|fifo"})
+    params: Dict[str, str] = Field(..., description="policy_type: allocation|replacement, policy: first_fit|best_fit|lru|fifo")
 
 class GetStateRequest(BaseModel):
     """Request for engine state."""
@@ -150,7 +159,7 @@ class ConfigResponse(BaseModel):
 async def health_check():
     """Health check endpoint."""
     try:
-        proc = engine_process
+        proc = app.state.engine
         is_running = proc.is_running()
         return HealthResponse(
             status="ok",
@@ -163,7 +172,7 @@ async def health_check():
 async def set_config(request: dict):
     """Configure the engine."""
     try:
-        proc = engine_process
+        proc = app.state.engine
         command = "initialize"
         params = {
             "ram_size_bytes": request.get("ram_size_bytes", 4096),
@@ -174,7 +183,13 @@ async def set_config(request: dict):
             "replacement_algo": request.get("replacement_algo", "fifo")
         }
 
-        response = proc.send_command(command, params)
+        page_size = params["page_size"]
+        if type(page_size) is not int or page_size not in (256, 512, 1024, 2048, 4096):
+            raise HTTPException(status_code=422, detail="Page size must be a power of two from 256 to 4096 bytes")
+        ram_size = params["ram_size_bytes"]
+        if type(ram_size) is not int or ram_size < page_size or ram_size % page_size:
+            raise HTTPException(status_code=422, detail="RAM size must be a positive multiple of page size")
+        response = await run_in_threadpool(proc.send_command, command, params)
 
         if response and response.get("success"):
             return ConfigResponse(
@@ -187,6 +202,8 @@ async def set_config(request: dict):
             )
         else:
             raise HTTPException(status_code=500, detail=response.get("error", "Unknown error"))
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -194,13 +211,15 @@ async def set_config(request: dict):
 async def reset_engine():
     """Reset the engine state."""
     try:
-        proc = engine_process
-        response = proc.send_command("reset")
+        proc = app.state.engine
+        response = await run_in_threadpool(proc.send_command, "reset")
 
         if response and response.get("success"):
             return {"status": "reset", "success": True}
         else:
             raise HTTPException(status_code=500, detail=response.get("error", "Unknown error") if response else "No response")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -208,14 +227,16 @@ async def reset_engine():
 async def create_process(request: CreateProcessRequest):
     """Create a simulated process."""
     try:
-        proc = engine_process
-        response = proc.send_command(request.command, request.params)
+        proc = app.state.engine
+        response = await run_in_threadpool(proc.send_command, request.command, request.params)
 
         if response and response.get("success"):
             pid = response["data"].get("pid", 1)
             return {"pid": pid, "success": True}
         else:
             raise HTTPException(status_code=500, detail=response.get("error", "Unknown error") if response else "No response")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -223,13 +244,15 @@ async def create_process(request: CreateProcessRequest):
 async def terminate_process(pid: int):
     """Terminate a simulated process."""
     try:
-        proc = engine_process
-        response = proc.send_command("terminate_process", {"pid": pid})
+        proc = app.state.engine
+        response = await run_in_threadpool(proc.send_command, "terminate_process", {"pid": pid})
 
         if response and response.get("success"):
             return {"pid": pid, "success": True}
         else:
             raise HTTPException(status_code=500, detail=response.get("error", "Unknown error") if response else "No response")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -237,13 +260,15 @@ async def terminate_process(pid: int):
 async def allocate_memory(request: AllocateRequest):
     """Allocate memory for a process."""
     try:
-        proc = engine_process
-        response = proc.send_command(request.command, request.params)
+        proc = app.state.engine
+        response = await run_in_threadpool(proc.send_command, request.command, request.params)
 
         if response and response.get("success"):
             return {"success": True, "message": "Memory allocated"}
         else:
             raise HTTPException(status_code=500, detail=response.get("error", "Unknown error") if response else "No response")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -251,13 +276,15 @@ async def allocate_memory(request: AllocateRequest):
 async def free_memory(request: FreeRequest):
     """Free memory for a process."""
     try:
-        proc = engine_process
-        response = proc.send_command(request.command, request.params)
+        proc = app.state.engine
+        response = await run_in_threadpool(proc.send_command, request.command, request.params)
 
         if response and response.get("success"):
             return {"success": True, "message": "Memory freed"}
         else:
             raise HTTPException(status_code=500, detail=response.get("error", "Unknown error") if response else "No response")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -265,8 +292,8 @@ async def free_memory(request: FreeRequest):
 async def translate_address(request: TranslateRequest):
     """Translate a virtual address."""
     try:
-        proc = engine_process
-        response = proc.send_command(request.command, request.params)
+        proc = app.state.engine
+        response = await run_in_threadpool(proc.send_command, request.command, request.params)
 
         if response and response.get("success"):
             data = response.get("data", {})
@@ -279,6 +306,8 @@ async def translate_address(request: TranslateRequest):
             }
         else:
             raise HTTPException(status_code=500, detail=response.get("error", "Unknown error") if response else "No response")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -286,13 +315,15 @@ async def translate_address(request: TranslateRequest):
 async def read_memory(request: ReadMemoryRequest):
     """Read from simulated memory."""
     try:
-        proc = engine_process
-        response = proc.send_command(request.command, request.params)
+        proc = app.state.engine
+        response = await run_in_threadpool(proc.send_command, request.command, request.params)
 
         if response and response.get("success"):
             return {"success": True, "bytes_read": response.get("data", {}).get("bytes_read", 0)}
         else:
             raise HTTPException(status_code=500, detail=response.get("error", "Unknown error") if response else "No response")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -300,13 +331,15 @@ async def read_memory(request: ReadMemoryRequest):
 async def write_memory(request: WriteMemoryRequest):
     """Write to simulated memory."""
     try:
-        proc = engine_process
-        response = proc.send_command(request.command, request.params)
+        proc = app.state.engine
+        response = await run_in_threadpool(proc.send_command, request.command, request.params)
 
         if response and response.get("success"):
             return {"success": True, "message": "Memory written"}
         else:
             raise HTTPException(status_code=500, detail=response.get("error", "Unknown error") if response else "No response")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -314,11 +347,11 @@ async def write_memory(request: WriteMemoryRequest):
 async def set_policies(request: SetPolicyRequest):
     """Set allocation and replacement policies."""
     try:
-        proc = engine_process
+        proc = app.state.engine
         policy_type = request.params.get("policy_type", "allocation")
         policy = request.params.get("policy", "first_fit")
 
-        response = proc.send_command("set_policy", {
+        response = await run_in_threadpool(proc.send_command, "set_policy", {
             "policy_type": policy_type,
             "policy": policy
         })
@@ -327,6 +360,8 @@ async def set_policies(request: SetPolicyRequest):
             return {"success": True, "message": "Policy updated"}
         else:
             raise HTTPException(status_code=500, detail=response.get("error", "Unknown error") if response else "No response")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -334,8 +369,8 @@ async def set_policies(request: SetPolicyRequest):
 async def get_state():
     """Get engine state snapshot."""
     try:
-        proc = engine_process
-        response = proc.send_command("get_snapshot")
+        proc = app.state.engine
+        response = await run_in_threadpool(proc.send_command, "get_snapshot")
 
         if response and response.get("success"):
             data = response.get("data", {})
@@ -349,6 +384,8 @@ async def get_state():
             }
         else:
             raise HTTPException(status_code=500, detail=response.get("error", "Unknown error") if response else "No response")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -356,8 +393,8 @@ async def get_state():
 async def get_statistics():
     """Get engine statistics."""
     try:
-        proc = engine_process
-        response = proc.send_command("get_statistics")
+        proc = app.state.engine
+        response = await run_in_threadpool(proc.send_command, "get_statistics")
 
         if response and response.get("success"):
             data = response.get("data", {})
@@ -370,6 +407,8 @@ async def get_statistics():
             }
         else:
             raise HTTPException(status_code=500, detail=response.get("error", "Unknown error") if response else "No response")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -377,8 +416,8 @@ async def get_statistics():
 async def get_events():
     """Get engine events."""
     try:
-        proc = engine_process
-        response = proc.send_command("get_events")
+        proc = app.state.engine
+        response = await run_in_threadpool(proc.send_command, "get_events")
 
         if response and response.get("success"):
             data = response.get("data", {})
@@ -388,57 +427,46 @@ async def get_events():
             }
         else:
             raise HTTPException(status_code=500, detail=response.get("error", "Unknown error") if response else "No response")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 # WebSocket endpoint for real-time updates
 @app.websocket("/ws/simulation")
 async def websocket_simulation(websocket: WebSocket):
-    """WebSocket endpoint for simulation state updates."""
+    """Stream changed engine snapshots and their recent events."""
     await websocket.accept()
+    proc = websocket.app.state.engine
+    previous = None
 
     try:
-        # Subscribe to engine events
-        proc = engine_process
-
-        # Send initial state
-        response = proc.send_command("get_snapshot")
-        if response and response.get("success"):
-            data = response.get("data", {})
-            await websocket.send_json({
-                "type": "initial_state",
-                "data": data
-            })
-
-        # Listen for engine output
         while True:
-            # Check if process is still running
-            if not proc.is_running():
-                break
+            response = await run_in_threadpool(proc.send_command, "get_snapshot")
+            if not response.get("success"):
+                await websocket.send_json({"type": "error", "error": response["error"]})
+                await websocket.close(code=1011)
+                return
 
-            # Try to read a line from engine stdout (non-blocking with timeout)
+            snapshot = response["data"]
+            if snapshot != previous:
+                await websocket.send_json({
+                    "type": "initial_state" if previous is None else "state_update",
+                    "data": snapshot,
+                })
+                previous = snapshot
+
+            # The CLI only writes replies. Poll for changes while listening for
+            # disconnects, including clients that never send a message.
             try:
-                line = proc.process.stdout.readline(1.0) if hasattr(proc.process, 'readline') else ""
-                if line.strip():
-                    # Parse and forward to client
-                    try:
-                        msg = json.loads(line.strip())
-                        # Route different message types
-                        if msg.get("type") == "state_update":
-                            await websocket.send_json(msg.get("data", {}))
-                        elif msg.get("type") == "event":
-                            await websocket.send_json({"event": msg.get("data", {})})
-                        else:
-                            await websocket.send_json(msg)
-                    except json.JSONDecodeError:
-                        await websocket.send_text(line)
-            except Exception:
-                break
+                message = await asyncio.wait_for(websocket.receive(), timeout=0.25)
+                if message["type"] == "websocket.disconnect":
+                    return
+            except asyncio.TimeoutError:
+                pass
+    except (WebSocketDisconnect, OSError):
+        pass
 
-    except WebSocketDisconnect:
-        pass
-    finally:
-        pass
 
 # HTML landing page
 @app.get("/")
@@ -483,14 +511,3 @@ async def landing_page():
     </body>
     </html>
     """)
-
-# Startup event
-@app.on_event("startup")
-async def startup_event():
-    Write-Host "FastAPI application starting..." -ForegroundColor Cyan
-
-# Shutdown event
-@app.on_event("shutdown")
-async def shutdown_event():
-    cleanup_engine()
-    Write-Host "FastAPI application shutting down..." -ForegroundColor Cyan
