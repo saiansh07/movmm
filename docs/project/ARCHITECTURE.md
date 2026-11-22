@@ -1,34 +1,15 @@
 # MoVMM-Engine: Architecture
 
-## Component Diagram
+## Component diagram
 
 ```text
-+----------------------+       JSON       +----------------------+
-|   Browser (HTML/JS)  | <------------> |  FastAPI Backend     |
-|  (Tailwind CSS)      |  REST API + WS  |  (Python + Uvicorn) |
-+----------------------+                +----------------------+
-        ^                               |  ↑     ↑       ↑
-        |                               |     |       |
-        |   WebSocket / HTTP POST      |     |       |
-        |------------------------------>|     |   JSON  |
-        |   (configuration, workloads) |     |  exchange|
-        | <-----------------------------|     |   (state)|
-        |                               |     ↑     ↑
-        |                               |   |   |     |
-        |                               |   |   |     |
-        |                               |   |   v     v
-        |                               |   C++   C++ Subprocess
-        |                               |   Engine   (pybind11 or
-        |                               |   (C++17)   persistent JSON)
-        |                               +-----------+
-        |                                   |
-        |                                   |  File-based
-        |                                   |  handoff
-        |                                   v
-        |                            +----------------------+
-        |                            |  swap.bin / logs     |
-        |                            |  (binary/JSON files) |
-        |                            +----------------------+
+Browser (HTML, plain CSS, vanilla JavaScript)
+    <-> HTTP REST and WebSocket
+FastAPI backend (Python 3.14, Uvicorn)
+    <-> JSON Lines over stdin/stdout
+Persistent C++17 engine subprocess
+    <-> fixed-size page reads and writes
+swap.bin
 ```
 
 ## Responsibilities
@@ -50,7 +31,7 @@
 - Manage state snapshots and event reporting
 - Run on Python + Uvicorn on Windows 11
 
-### Browser Frontend (HTML + Tailwind CSS + Vanilla JS)
+### Browser Frontend (HTML + plain CSS + vanilla JavaScript)
 - User interface for machine configuration
 - Memory map visualization
 - Process manager interface
@@ -62,142 +43,64 @@
 - Execution history panel
 - Never independently fabricate memory operations or maintain competing simulation
 
-## Communication Flow
+## Communication flow
 
-### 1. Initial Setup
-1. User opens browser to `http://localhost:8000`
-2. Frontend loads configuration UI
-3. Backend initializes C++ engine subprocess (or pybind11 context)
-4. Engine initializes simulated state (RAM, page tables, TLB, heap, swap)
-5. Engine state exported to frontend as initial JSON snapshot
+1. FastAPI starts the engine subprocess during application startup. It serves the dashboard at `/` and static assets under `/frontend/`.
+2. The browser sends configuration to `POST /api/v1/config`. FastAPI forwards `initialize` to the CLI, which rebuilds the simulated machine.
+3. The browser sends heap requests to `/api/v1/memory/allocate` and `/api/v1/memory/free`. Translation and byte access use `/api/v1/memory/translate`, `/api/v1/memory/read`, and `/api/v1/memory/write`. Page permissions use `/api/v1/memory/permissions`.
+4. The engine decomposes virtual addresses into a page number and offset, looks up cached translations in the TLB, and handles demand faults. With full RAM, the active FIFO or LRU policy selects a victim. The engine writes dirty pages to `swap.bin` and restores backed pages on demand.
+5. FastAPI requests `get_snapshot` for `GET /api/v1/state` and for the stream at `/ws/simulation`. The browser renders the snapshot and uses its counters to calculate rates. The engine supplies both eviction orders and machine-wide swap ownership.
 
-### 2. Runtime Interaction
-1. User modifies configuration (RAM size, page size, TLB capacity, swap capacity)
-2. Frontend sends HTTP POST to `/configure` with new parameters
-3. Backend forwards configuration to C++ engine
-4. Engine reinitializes with new parameters
-5. Frontend updates UI to reflect new state
+## Engine interfaces
 
-### 3. Workload Execution
-1. User issues memory allocation/deallocation requests via UI
-2. Frontend sends HTTP POST to `/allocate` or `/deallocate`
-3. Backend forwards to C++ engine
-4. Engine performs operation, returns result (success/failure, fragmentation stats, new block addresses)
-5. Backend returns result to frontend
-6. UI updates: memory map, heap state, TLB contents, page tables
+- [Engine controller](../../cpp/engine.h) coordinates state, policy, processes, and snapshots.
+- [Heap allocator](../../cpp/heap_allocator.h) manages allocation, block splitting, coalescing, and fragmentation.
+- [MMU](../../cpp/mmu.h) handles page-table translation and TLB lookup.
+- [Paging manager](../../cpp/paging.h) manages frame residency and victim selection.
+- [Swap manager](../../cpp/swap.h) allocates and releases disk slots and transfers page data.
 
-### 4. Memory Access
-1. User issues virtual memory access (address translation)
-2. Frontend sends HTTP POST to `/access` with 16-bit virtual address
-3. C++ engine performs translation:
-   - Decompose 16-bit VA into page number + offset
-   - Look up page table entry
-   - Check TLB (hit → return physical address; miss → page table walk)
-   - Handle page fault if page not resident
-   - If page fault: FIFO/LRU replacement if physical memory full
-   - If swap involved: page-out dirty page to swap.bin, page-in from swap.bin
-4. Engine returns physical address, hit/miss status, page fault info, any swap operation
-5. Frontend updates: TLB hit/miss counter, page table entry, memory map
+The [backend API](../BACKEND_API.md) and [CLI protocol](../ENGINE_API.md) describe the request envelopes and response fields. The swap file is recreated on initialization or reset.
 
-### 5. State Snapshots & Event Reporting
-1. Periodic or on-demand state export from C++ engine
-2. Backend collects snapshots and makes available via API
-3. Frontend visualizes: memory map, page tables, TLB contents, heap allocation, swap usage
-4. Performance metrics collected and displayed: page fault rate, TLB hit rate, swap operations, allocation success rate
+## Directory layout
 
-## Interfaces
-
-### C++ Header Interfaces (planned structure)
-
-#### heap_allocator.h
-- `void* my_malloc(size_t size)` — allocate block from custom heap
-- `void my_free(void* ptr)` — free block, coalesce adjacent free blocks
-- `struct Block { void* addr; size_t size; bool free; }` — free-list block structure
-- `enum AllocResult { ALLOC_OK, ALLOC_OUT_OF_MEMORY, ALLOC_INVALID_SIZE }` — allocation results
-- `FragmentationStats get_fragmentation_stats()` — internal fragmentation tracking
-
-#### mmu.h
-- `struct VirtualAddress16 { uint16_t va; uint16_t page_number; uint16_t offset; }` — 16-bit VA decomposition
-- `struct PageTableEntry { bool valid; uint16_t physical_frame; bool read_write; bool present; }` — PTE structure
-- `struct TranslationResult { uint16_t physical_address; bool tlb_hit; bool page_fault; }` — translation outcome
-- `TranslationResult translate(uint16_t virtual_address)` — translate VA to PA
-- `void update_tlb(uint16_t physical_frame, bool accessed_dirty)` — TLB update
-
-#### paging.h
-- `struct FrameInfo { bool resident; bool dirty; uint16_t swap_slot; }` — physical frame state
-- `enum ReplacementAlgorithm { FIFO, LRU }` — replacement algorithms
-- `struct PageFaultInfo { bool occurred; uint16_t victim_frame; uint16_t swapped_slot; bool dirty_writeback; }` — fault details
-- `PageFaultInfo handle_page_fault(uint16_t virtual_page, ReplacementAlgorithm algo)` — fault handling
-- `Metrics get_performance_metrics()` — fault/miss/replacement statistics
-
-#### swap.h
-- `struct SwapStats { size_t total_swap; size_t used_swap; size_t page_outs; size_t page_ins; }` — swap statistics
-- `SwapResult initialize_swap(const char* path, size_t capacity_pages)` — swap initialization
-- `SwapResult page_out(uint16_t frame, uint16_t slot)` — write page to swap.bin
-- `SwapResult page_in(uint16_t frame, uint16_t slot)` — read page from swap.bin
-- `SwapStats get_stats()` — current swap usage
-
-## Communication Mechanisms
-
-### JSON-Based API (FastAPI → C++ Subprocess)
-Engine control and state queries via JSON over subprocess stdin/stdout or named pipes:
-- `{"type": "configure", "ram_pages": N, "page_size": S, "tlb_entries": E, "swap_capacity": M}`
-- `{"type": "allocate", "size": S}` → `{"type": "allocation_result", "success": B, "address": A, "block_id": ID, "fragmentation": F}`
-- `{"type": "deallocate", "address": A}` → `{"type": "deallocation_result", "success": B}`
-- `{"type": "translate", "virtual_address": VA}` → `{"type": "translation_result", "physical_address": PA, "tlb_hit": B, "page_fault": B, "algorithm": A}`
-- `{"type": "access", "virtual_address": VA}` → comprehensive access result
-- `{"type": "get_state"}` → full simulated state snapshot
-- `{"type": "get_metrics"}` → performance metrics
-
-### File-Based Handoff (swap.bin)
-- Persistent binary file for swap storage
-- Page-out/in operations read/write fixed-size pages
-- Used when physical memory is full and replacement is needed
-
-## Proposed Directory Structure
-
-```
+```text
 movmm/
-├── CLAUDE.md              # Project instructions
-├── AGENTS.md              # Coding agent instructions
-├── .gitignore             # Windows build outputs, Python envs, swap.bin, logs
-├── docs/                  # Additional documentation
-│   ├── project/              # Project context, architecture, status, and historical reports
-│   └── ...
-├── cpp/                   # C++ engine source
-│   ├── CMakeLists.txt
-│   ├── engine.cpp         # Main engine entry point
-│   ├── heap_allocator.h   # User-space heap manager
-│   ├── heap_allocator.cpp
-│   ├── mmu.h              # MMU and TLB
-│   ├── mmu.cpp
-│   ├── paging.h           # Demand paging and replacement
-│   ├── paging.cpp
-│   ├── swap.h             # Swap file subsystem
-│   ├── swap.cpp
-│   ├── types.h            # Shared types (VirtualAddress16, PageTableEntry, etc.)
-│   └── tests/             # Unit tests for each module
-├── python/                # FastAPI backend
-│   ├── main.py            # FastAPI app, frontend serving, API endpoints
-│   ├── engine_interface.py # C++ subprocess management or pybind11 bindings
-│   ├── models.py          # Pydantic models for API requests/responses
-│   ├── config.py          # Configuration defaults
-│   └── requirements.txt
-├── frontend/              # Browser frontend
-│   ├── index.html         # Main page
-│   ├── styles.css         # Custom Tailwind overrides
-│   ├── app.js             # Main application logic
-│   ├── config-ui.html/htm # Configuration dialog
-│   ├── memory-map.html/htm # Memory map visualization
-│   ├── process-manager.html/htm # Process manager
-│   ├── heap-allocator.html/htm # Heap allocator explorer
-│   ├── mmu-tlb.html/htm   # MMU & TLB explorer
-│   ├── paging-simulator.html/htm # Paging simulator
-│   ├── swap-manager.html/htm # Swap manager
-│   ├── performance-analytics.html/htm # Analytics dashboard
-│   ├── execution-history.html/htm # Execution history
-│   └── assets/            # SVGs, icons, etc.
-└── tests/                 # Integration tests
+  AGENTS.md
+  CLAUDE.md
+  run.ps1
+  cpp/
+    CMakeLists.txt
+    engine.cpp, engine.h, engine_cli.cpp
+    heap_allocator.cpp, heap_allocator.h
+    mmu.cpp, mmu.h
+    paging.cpp, paging.h
+    swap.cpp, swap.h
+    events.cpp, events.h, types.h
+    json/
+      json.hpp, LICENSE.MIT
+    python/
+      __init__.py
+      config.py
+      main.py
+      requirements.txt
+    tests/
+      test_engine.cpp
+      check_http_ws.py
+  frontend/
+    index.html
+    styles.css
+    app.js
+  docs/
+    README.md
+    WINDOWS_SETUP.md
+    BACKEND_API.md
+    ENGINE_API.md
+    project/
+      ARCHITECTURE.md
+      PROJECT_CONTEXT.md
+      DEVELOPMENT_STATUS.md
+      REPORT.md
+      FINAL_REPORT.md
 ```
 
 ## Integration Strategy Evaluation
@@ -214,22 +117,11 @@ movmm/
 - Cons: Serialization overhead, slightly higher latency, needs well-defined message protocol
 - Best when: Windows-first deployment, simpler integration path, clear protocol boundaries
 
-**Decision**: Start with **persistent JSON subprocess** approach for Phase 2-3. It provides cleaner Windows compatibility, avoids pybind11 complexities, and the JSON protocol naturally fits the FastAPI architecture. Can transition to pybind11 later if performance measurements show the need.
+**Decision**: Use a **persistent JSON subprocess**. It provides cleaner Windows compatibility, avoids pybind11 complexities, and the JSON protocol naturally fits the FastAPI architecture. Can transition to pybind11 later if performance measurements show the need.
 
-## State Snapshots
+## State snapshots
 
-Engine exports state on request (via `/get_state` API endpoint):
-```json
-{
-  "ram": { ... },              // Physical memory state
-  "page_tables": [...],        // Page table entries for all processes
-  "tlb": [...],                // TLB contents (tag, physical_frame, valid)
-  "heap": { ... },             // Heap allocation state
-  "processes": [...],          // Process information
-  "swap": { ... },             // Swap file state
-  "metrics": { ... }           // Performance metrics (page faults, TLB hits, etc.)
-}
-```
+The snapshot contains `machine`, `heap`, `mmu`, `paging`, `swap`, `processes`, `frames`, and `events`. FastAPI returns these fields alongside `success` on the REST endpoint and inside `data` in WebSocket messages. See the [snapshot field reference](../ENGINE_API.md#engine-state-snapshots).
 
 ## Error Handling
 
@@ -240,10 +132,9 @@ Engine exports state on request (via `/get_state` API endpoint):
 - Swap I/O errors (swap.bin not found, capacity exceeded)
 
 ### Backend Error Translation
-- Map C++ error codes to HTTP status codes
+- Translate engine failures into HTTP responses. See the backend API for route-specific behavior.
 - Return structured JSON error responses
 - Log errors to console/file for debugging
-- Never expose raw C++ internals to frontend
 
 ### Frontend Error Handling
 - Display user-friendly error messages

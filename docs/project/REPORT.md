@@ -1,5 +1,7 @@
 # Windows Subprocess Communication Fix Report
 
+> **Historical Phase 4 report.** For current project status and verification, see [Development status](DEVELOPMENT_STATUS.md).
+
 ## Issue
 The original `cpp/python/config.py` used `select.select()` on subprocess stdout pipes, which is **POSIX-only** and raises `OSError: [WinError 10093]` on Windows.
 

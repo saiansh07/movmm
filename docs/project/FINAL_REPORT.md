@@ -1,5 +1,7 @@
 # MoVMM-Engine Windows Subprocess Communication Fix - Final Report
 
+> **Historical Phase 4 report.** For current project status and verification, see [Development status](DEVELOPMENT_STATUS.md).
+
 ## Issue Fixed
 Original `select.select()` on Windows subprocess pipes caused `OSError: [WinError 10093]` (POSIX-only call).
 

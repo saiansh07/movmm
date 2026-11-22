@@ -10,7 +10,7 @@
 ## Technology Constraints
 - **Core**: C++17 or newer, CMake
 - **Backend**: Python, FastAPI, Pydantic, Uvicorn
-- **Frontend**: HTML5, Basic CSS, Vanilla JavaScript, Tailwind CSS
+- **Frontend**: HTML5, plain CSS, Vanilla JavaScript
 - **No React, Vue, Angular, Next.js, Vite, TypeScript, Redux, or other frontend frameworks**
 - **Windows 11 native** — no Linux, WSL, Docker, VM, Bash, or POSIX-only APIs
 - Use PowerShell, MinGW-w64, CMake, Python, standard C++ filesystem APIs, Windows-compatible process management

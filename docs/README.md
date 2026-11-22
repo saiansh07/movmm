@@ -29,7 +29,7 @@ cmake --build cpp/build/windows --parallel
 ctest --test-dir cpp/build/windows --output-on-failure
 ```
 
-After the launcher has installed the Python dependencies, run the isolated HTTP and WebSocket checks:
+After the launcher installs dependencies and the CMake build completes, run the isolated HTTP and WebSocket checks from the repository root using the launcher's virtual environment:
 
 ```powershell
 & "$env:USERPROFILE\movmm_venv\Scripts\python.exe" cpp/tests/check_http_ws.py cpp/build/windows/engine_cli.exe

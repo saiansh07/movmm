@@ -30,7 +30,7 @@ MoVMM-Engine is a modular virtual memory management framework that simulates imp
 ## Technology Stack
 - **Core**: C++17+, CMake
 - **Backend**: Python, FastAPI, Pydantic, Uvicorn
-- **Frontend**: HTML5, Basic CSS, Vanilla JavaScript, Tailwind CSS (native, no React/Vue/Angular/Next.js/Vite/TypeScript/Redux)
+- **Frontend**: HTML5, plain CSS, Vanilla JavaScript (native, no React/Vue/Angular/Next.js/Vite/TypeScript/Redux)
 - **Platform**: Windows 11 native
 
 ## Application Objectives

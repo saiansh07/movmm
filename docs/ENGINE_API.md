@@ -1,109 +1,56 @@
-# MoVMM-Engine Phase 4 - Engine API Protocol
+# MoVMM-Engine CLI protocol
 
-## Overview
-The MoVMM-Engine C++ core communicates with the FastAPI backend via a persistent JSON Lines subprocess protocol. This document defines the supported commands, request/response schemas, and interaction semantics.
+FastAPI starts one persistent C++ subprocess and sends one JSON object per line on stdin. The CLI writes one JSON reply per request on stdout and sends diagnostics to stderr.
 
-## Persistent Subprocess Protocol
+## Request and response envelopes
 
-### Connection
-- One persistent C++ engine subprocess is started by the FastAPI backend
-- Communication via stdin (commands) and stdout (responses)
-- stderr is kept separate from the protocol
-- Request IDs correlate requests with responses
+Use a string request ID. The CLI echoes it in the response. Omit `params` for commands that take no parameters.
 
-### Request Format (JSON Lines)
 ```json
-{"id":"req-1","command":"get_state","params":{}}
+{"id":"req-1","command":"create_process"}
+{"id":"req-1","success":true,"data":{"pid":1}}
+{"id":"req-2","command":"set_page_permission","params":{"pid":1,"virtual_address":0,"writable":false}}
+{"id":"req-2","success":true}
 ```
 
-### Response Format (JSON Lines)
-```json
-{"id":"req-1","success":true,"data":{...},"error":null}
-```
+Replies always contain `id` and `success`. A successful reply contains `data` only when the command returns a payload. Failures include an `error` string. A malformed JSON request returns `id: "unknown"`, `success: false`, `data: null`, and a parse error. A missing or nonstring request ID is reported as `"unknown"`.
 
-### Supported Commands
+## Supported commands
 
-| Command | Parameters | Response Data |
-|---------|-----------|--------------|
-| `initialize` | `ram_size_bytes`, `page_size`, `tlb_capacity`, `swap_capacity_pages`, `fit_policy`, `replacement_algo` | `{"status": "initialized", "config": ...}` |
-| `reset` | (none) | `{"status": "reset"}` |
-| `create_process` | `pid` (Process ID) | `{"pid": <int>}` |
-| `terminate_process` | `pid` (Process ID) | `{"success": true/false}` |
-| `allocate` | `pid`, `size` | `{"success": true/false}` |
-| `free` | `pid`, `address` (owned heap block offset in bytes) | `{"success": true/false}` |
-| `translate` | `pid`, `virtual_address` | `{"physical_address": int, "tlb_hit": bool, "page_fault": bool, "protection_fault": bool}` |
-| `read_memory` | `pid`, `virtual_address`, `size` | `{"bytes_read": int}` |
-| `write_memory` | `pid`, `virtual_address`, `data` (array) | `{"success": true/false}` |
-| `set_policy` | `policy_type` (allocation/replacement), `policy` (first_fit/best_fit/lru/fifo) | `{"success": true/false}` |
-| `get_state` | (none) | Full engine snapshot |
-| `get_statistics` | (none) | Statistics object |
-| `get_events` | (none) | Array of recent events |
+| Command | Fields inside `params` | Successful `data` payload |
+|---|---|---|
+| `initialize` | Optional `ram_size_bytes`, `page_size`, `tlb_capacity`, `swap_capacity_pages`, `fit_policy`, `replacement_algo` | `status: "initialized"` and `config` (RAM size in bytes) |
+| `reset` | None | `status: "reset"` |
+| `create_process` | None. The engine assigns the PID. | `pid` |
+| `terminate_process` | `pid` | None |
+| `allocate` | `pid`, `size` | None |
+| `free` | `pid`, `address` (owned heap block offset in bytes) | None |
+| `translate` | `pid`, `virtual_address` | `physical_address`, `virtual_page`, `page_offset`, `physical_frame`, `tlb_hit`, `page_fault`, `protection_fault` |
+| `read_memory` | `pid`, `virtual_address`, `size` | `bytes_read`, `bytes` |
+| `write_memory` | `pid`, `virtual_address`, `data` (byte array) | None |
+| `set_page_permission` | `pid`, `virtual_address`, `writable` (boolean) | None |
+| `set_policy` | `policy_type`, `policy` | None |
+| `get_snapshot` or `get_state` | None | Engine state snapshot |
+| `get_statistics` | None | `total_allocations`, `total_frees`, `active_allocations`, `tlb_hit_rate` (percent), `page_faults` |
+| `get_events` | None | Object with an `events` array |
 
-### Error Handling
-- Malformed JSON: `{"success": false, "error": "JSON parse error: ...}`
-- Unknown command: `{"success": false, "error": "Unknown command: ...}`
-- Missing parameters: `{"success": false, "error": "Missing parameter: ...}`
-- Engine errors: `{"success": false, "error": "<engine error message>"}`
-- Request ID is always preserved in the response for correlation
+Virtual addresses are integers from 0 through 65535. Reads and writes must fit within one virtual page. `translate` can return `success: true` with `protection_fault: true` and `physical_frame: null`. A handled demand fault is indicated by `page_fault: true`. The permissions command changes the page containing the address and returns `success: false` with `error: "Process not found"` for an unknown PID. A later write to a read-only page fails and records a `protection_fault` event.
+
+For `set_policy`, use `allocation` with `first_fit` or `best_fit`, or `replacement` with `fifo` or `lru`.
 
 ## Engine State Snapshots
 
-### Machine State
-- `ram_size_bytes`: Total RAM in bytes
-- `page_size`: Page size in bytes
-- `total_frames`: Total physical frames
-- `used_swap_slots`: Used swap slots
-- `total_swap_slots`: Total swap slots
-- `heap_utilization_percent`: Percentage of heap used
+- **`machine`** contains `ram_size_bytes`, `page_size`, `total_frames`, `used_swap_slots`, `total_swap_slots`, `heap_utilization_percent`, and `fit_policy`.
+- **`heap`** contains `allocated_bytes`, `free_bytes`, `total_blocks`, `free_blocks`, `allocation_attempts`, `total_allocations`, `total_frees`, `external_fragmentation_bytes`, `internal_fragmentation_bytes`, and `blocks`. Blocks have byte `offset`, byte `size`, and a process `owner` (null for a free block). External fragmentation is total free bytes minus the largest contiguous free block. Internal fragmentation is the excess bytes reserved in live allocations.
+- **`mmu`** contains `tlb_lookups`, `tlb_hits`, `tlb_misses`, `tlb_capacity`, and valid `entries` with `slot`, `pid`, `page`, `frame`, and `dirty`.
+- **`paging`** contains `page_faults`, `resident_pages`, `replacements`, `fifo_enabled`, `lru_enabled`, `fifo_order`, and `lru_order`. Both order arrays list resident frame numbers from first to last eviction candidate. The first is the next victim when RAM is full under that policy.
+- **`swap`** contains `page_outs`, `page_ins`, `used_slots`, and `slots`. Each slot has a numeric `slot` index, owner `pid`, virtual `page`, and `resident` flag. A free slot has null `pid` and `page` and `resident: false`. A slot that backs a resident page remains occupied and has `resident: true`.
+- **`processes`** contains `pid` and `pages` for each process. Page entries have `page`, `present`, `frame` (null when nonresident), `swap_slot` (null without backing), `referenced`, `dirty`, and `writable`.
+- **`frames`** lists all physical frames with `frame`, `resident`, `pid`, `page`, and `dirty`. Free frames have null `pid` and `page`.
+- **`events`** contains recent events in the same form as `get_events`.
 
-### Heap State
-- `allocated_bytes`: Total allocated bytes
-- `free_bytes`: Free heap bytes
-- `total_blocks`: Total blocks
-- `free_blocks`: Free blocks
-- `blocks`: Blocks in heap order with byte `offset`, byte `size`, and `owner` PID. Free blocks have a null owner.
-- `total_allocations` and `total_frees`: Successful operations since initialization or reset. Process termination counts each block it releases.
-- `external_fragmentation_bytes`: Total free bytes minus the largest contiguous free block.
-- `internal_fragmentation_bytes`: Bytes reserved in live blocks beyond the sizes requested.
+## Event reporting
 
-### MMU State
-- `tlb_hits`: TLB hit count
-- `tlb_misses`: TLB miss count
-- `tlb_capacity`: TLB entry count
+The CLI retains up to 1,000 events. The snapshot and `get_events` expose `event_id`, `step_number`, `event_type`, `process_id`, `virtual_address`, `page_number`, `frame_number`, `swap_slot`, `success`, and `explanation`. Event IDs increase within a simulation and restart when it is initialized or reset.
 
-### Paging State
-- `page_faults`: Page fault count
-- `resident_pages`: Resident page count
-- `fifo_enabled`: FIFO replacement active
-- `lru_enabled`: LRU replacement active
-
-### Swap State
-- `page_outs`: Page-out count
-- `page_ins`: Page-in count
-- `used_slots`: Used swap slots
-
-## Event Reporting
-
-Events are generated for all meaningful operations and maintained in a bounded history (max 1000 events). Each event contains:
-- `event_id`: Unique monotonically increasing ID
-- `step_number`: Monotonic simulation step
-- `event_type`: One of the supported event categories
-- `process_id`: Associated process ID (when applicable)
-- `virtual_address`: Virtual address (when applicable)
-- `page_number`: Page number (when applicable)
-- `frame_number`: Frame number (when applicable)
-- `swap_slot`: Swap slot (when applicable)
-- `success`: Operation success flag
-- `explanation`: Human-readable explanation
-
-## JSON Serialization
-- All communication uses JSON Lines format (one JSON object per line)
-- No diagnostic output on stdout; diagnostics go to stderr
-- Request IDs enable correlation between requests and responses
-- Proper handling of malformed input and unknown commands
-
-## Integration Notes
-- The C++ engine is the single source of truth for all simulated memory state
-- The FastAPI backend does not fabricate memory operations or maintain competing state
-- All memory management, statistics, and event reporting originate from the C++ engine
-- The subprocess model ensures process isolation and platform independence (Windows 11)
+See the [backend API](BACKEND_API.md) for the HTTP and WebSocket forms of these responses.

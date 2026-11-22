@@ -32,3 +32,13 @@ ctest --test-dir cpp/build/windows --output-on-failure
 ```
 
 The native tests cover the heap, address translation, TLB, paging, replacement, swap data integrity, page permissions, and bounded event history. The repository includes the MIT-licensed nlohmann/json header needed to compile the CLI.
+
+## HTTP and WebSocket integration check
+
+After the launcher installs dependencies and the CMake build completes, run from the repository root:
+
+```powershell
+& "$env:USERPROFILE\movmm_venv\Scripts\python.exe" cpp/tests/check_http_ws.py cpp/build/windows/engine_cli.exe
+```
+
+This starts an isolated Uvicorn instance with a temporary swap file.
