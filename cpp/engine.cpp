@@ -44,12 +44,14 @@ bool Engine::initialize(const EngineConfig& config) {
 
     state_.simulation_step = 0;
     state_.next_process_id = 1;
+    state_.allocation_attempts = 0;
     state_.total_allocations = 0;
     state_.total_frees = 0;
     state_.active_allocations = 0;
     state_.allocated_bytes = 0;
 
     event_history_.clear();
+    next_event_id_ = 1;
 
     // Redirect diagnostic output to stderr
     cerr << "Engine initialized:" << endl;
@@ -79,13 +81,13 @@ ProcessId Engine::create_process() {
 
     state_.simulation_step++;
     Event ev;
-    ev.event_id = event_history_.size() + 1;
+
     ev.step_number = state_.simulation_step;
     ev.event_type = "process_created";
     ev.process_id = static_cast<int>(pid);
     ev.success = true;
     ev.explanation = "Process created with ID " + to_string(pid);
-    event_history_.push_back(ev);
+    record_event(std::move(ev));
     cerr << "Process created: PID " << pid << endl;
     return pid;
 }
@@ -93,26 +95,26 @@ ProcessId Engine::create_process() {
 bool Engine::terminate_process(ProcessId pid) {
     if (pid == 0) {
         Event ev;
-        ev.event_id = event_history_.size() + 1;
+
         ev.step_number = state_.simulation_step + 1;
         ev.event_type = "process_terminated";
         ev.process_id = 0;
         ev.success = false;
         ev.explanation = "Cannot terminate process ID 0";
-        event_history_.push_back(ev);
+        record_event(std::move(ev));
         return false;
     }
 
     // Validate process exists
     if (state_.process_page_tables.find(pid) == state_.process_page_tables.end()) {
         Event ev;
-        ev.event_id = event_history_.size() + 1;
+
         ev.step_number = state_.simulation_step + 1;
         ev.event_type = "process_terminated";
         ev.process_id = static_cast<int>(pid);
         ev.success = false;
         ev.explanation = "Process not found: PID " + to_string(pid);
-        event_history_.push_back(ev);
+        record_event(std::move(ev));
         return false;
     }
 
@@ -129,40 +131,41 @@ bool Engine::terminate_process(ProcessId pid) {
 
     state_.simulation_step++;
     Event ev;
-    ev.event_id = event_history_.size() + 1;
+
     ev.step_number = state_.simulation_step;
     ev.event_type = "process_terminated";
     ev.process_id = static_cast<int>(pid);
     ev.success = true;
     ev.explanation = "Process terminated: PID " + to_string(pid);
-    event_history_.push_back(ev);
+    record_event(std::move(ev));
     cerr << "Process terminated: PID " << pid << endl;
     return true;
 }
 
 bool Engine::allocate_memory(ProcessId pid, size_t size) {
+    ++state_.allocation_attempts;
     if (size == 0) {
         Event ev;
-        ev.event_id = event_history_.size() + 1;
+
         ev.step_number = state_.simulation_step + 1;
         ev.event_type = "memory_allocated";
         ev.process_id = static_cast<int>(pid);
         ev.success = false;
         ev.explanation = "Allocation size cannot be zero";
-        event_history_.push_back(ev);
+        record_event(std::move(ev));
         return false;
     }
 
     // Validate process exists
     if (state_.process_page_tables.find(pid) == state_.process_page_tables.end()) {
         Event ev;
-        ev.event_id = event_history_.size() + 1;
+
         ev.step_number = state_.simulation_step + 1;
         ev.event_type = "memory_allocated";
         ev.process_id = static_cast<int>(pid);
         ev.success = false;
         ev.explanation = "Process not found: PID " + to_string(pid);
-        event_history_.push_back(ev);
+        record_event(std::move(ev));
         return false;
     }
 
@@ -172,7 +175,7 @@ bool Engine::allocate_memory(ProcessId pid, size_t size) {
     bool success = (ptr != nullptr);
 
     Event ev;
-    ev.event_id = event_history_.size() + 1;
+
     ev.step_number = state_.simulation_step;
     ev.event_type = "memory_allocated";
     ev.process_id = static_cast<int>(pid);
@@ -189,9 +192,8 @@ bool Engine::allocate_memory(ProcessId pid, size_t size) {
     } else {
         ev.explanation = "Allocation failed: out of memory (" + to_string(size) + " bytes requested)";
     }
-    event_history_.push_back(ev);
-
     cerr << (success ? "Allocated" : "Allocation failed") << ": " << ev.explanation << endl;
+    record_event(std::move(ev));
     return success;
 }
 
@@ -204,7 +206,7 @@ bool Engine::free_heap_offset(ProcessId pid, size_t offset) {
     const auto allocation = heap_allocations_.find(offset);
     const bool owned = allocation != heap_allocations_.end() && allocation->second.owner == pid;
     Event ev;
-    ev.event_id = event_history_.size() + 1;
+
     ev.step_number = ++state_.simulation_step;
     ev.event_type = "memory_freed";
     ev.process_id = static_cast<int>(pid);
@@ -219,7 +221,7 @@ bool Engine::free_heap_offset(ProcessId pid, size_t offset) {
     }
     ev.explanation = owned ? "Freed block at heap offset " + to_string(offset)
                           : "No block owned by this process at heap offset " + to_string(offset);
-    event_history_.push_back(ev);
+    record_event(std::move(ev));
     return owned;
 }
 
@@ -233,14 +235,14 @@ Engine::TranslationResult Engine::translate_address(ProcessId pid, VirtualAddres
         result.protection_fault = true;
 
         Event ev;
-        ev.event_id = event_history_.size() + 1;
+
         ev.step_number = state_.simulation_step + 1;
         ev.event_type = "address_translated";
         ev.process_id = static_cast<int>(pid);
         ev.virtual_address = static_cast<int>(va);
         ev.success = false;
         ev.explanation = "Translation failed: process not found: PID " + to_string(pid);
-        event_history_.push_back(ev);
+        record_event(std::move(ev));
 
         state_.simulation_step++;
         return result;
@@ -267,7 +269,7 @@ Engine::TranslationResult Engine::translate_address(ProcessId pid, VirtualAddres
         auto record = [&](const string& type, ProcessId owner, PageNumber page, FrameNumber frame,
                           uint32_t slot, const string& explanation) {
             Event event{};
-            event.event_id = event_history_.size() + 1;
+
             event.step_number = state_.simulation_step;
             event.event_type = type;
             event.process_id = static_cast<int>(owner);
@@ -276,7 +278,7 @@ Engine::TranslationResult Engine::translate_address(ProcessId pid, VirtualAddres
             event.frame_number = frame;
             event.swap_slot = slot;
             event.explanation = explanation;
-            event_history_.push_back(event);
+            record_event(std::move(event));
         };
         record("page_fault", pid, addr.page_number, fault.allocated_frame, 0, "Loaded a non-resident page");
         if (fault.victim_selected) {
@@ -297,14 +299,14 @@ Engine::TranslationResult Engine::translate_address(ProcessId pid, VirtualAddres
     state_.paging->access_page(page.frame_number, false);
 
     Event ev;
-    ev.event_id = event_history_.size() + 1;
+
     ev.step_number = state_.simulation_step;
     ev.event_type = "address_translated";
     ev.process_id = static_cast<int>(pid);
     ev.virtual_address = static_cast<int>(va);
     ev.success = true;
     ev.explanation = "Virtual address " + to_string(va) + " translated to physical " + to_string(result.physical_address);
-    event_history_.push_back(ev);
+    record_event(std::move(ev));
 
     cerr << "Translated VA " << hex << va << " -> PA " << dec << result.physical_address
          << " (TLB hit: " << (result.tlb_hit ? "yes" : "no") << ")" << endl;
@@ -320,30 +322,45 @@ bool Engine::read_memory(ProcessId pid, VirtualAddress va, void* buffer, size_t 
         if (size) memcpy(buffer, frame.data.data() + offset, size);
 
         Event ev;
-        ev.event_id = event_history_.size() + 1;
+
         ev.step_number = state_.simulation_step;
         ev.event_type = "memory_read";
         ev.process_id = static_cast<int>(pid);
         ev.virtual_address = static_cast<int>(va);
         ev.success = true;
         ev.explanation = "Read " + to_string(size) + " bytes from VA " + to_string(va) + " -> PA " + to_string(result.physical_address);
-        event_history_.push_back(ev);
+        record_event(std::move(ev));
         return true;
     }
 
     Event ev;
-    ev.event_id = event_history_.size() + 1;
+
     ev.step_number = state_.simulation_step;
     ev.event_type = "memory_read";
     ev.process_id = static_cast<int>(pid);
     ev.virtual_address = static_cast<int>(va);
     ev.success = false;
     ev.explanation = "Read failed at VA " + to_string(va);
-    event_history_.push_back(ev);
+    record_event(std::move(ev));
     return false;
 }
 
 bool Engine::write_memory(ProcessId pid, VirtualAddress va, const void* data, size_t size) {
+    const VirtualAddress16 address(va, static_cast<uint16_t>(config_.page_size));
+    const auto process = state_.process_page_tables.find(pid);
+    if (process != state_.process_page_tables.end() && address.page_number < process->second.size() &&
+        !process->second[address.page_number].read_write) {
+        Event event{};
+        event.step_number = ++state_.simulation_step;
+        event.event_type = "protection_fault";
+        event.process_id = static_cast<int>(pid);
+        event.virtual_address = va;
+        event.page_number = address.page_number;
+        event.success = false;
+        event.explanation = "Write denied for a read-only page";
+        record_event(std::move(event));
+        return false;
+    }
     TranslationResult result = translate_address(pid, va);
 
     const size_t offset = va % config_.page_size;
@@ -357,27 +374,48 @@ bool Engine::write_memory(ProcessId pid, VirtualAddress va, const void* data, si
         state_.mmu->update_tlb(pid, addr.page_number, page.frame_number, true);
 
         Event ev;
-        ev.event_id = event_history_.size() + 1;
+
         ev.step_number = state_.simulation_step;
         ev.event_type = "memory_write";
         ev.process_id = static_cast<int>(pid);
         ev.virtual_address = static_cast<int>(va);
         ev.success = true;
         ev.explanation = "Wrote " + to_string(size) + " bytes to VA " + to_string(va) + " -> PA " + to_string(result.physical_address);
-        event_history_.push_back(ev);
+        record_event(std::move(ev));
         return true;
     }
 
     Event ev;
-    ev.event_id = event_history_.size() + 1;
+
     ev.step_number = state_.simulation_step;
     ev.event_type = "memory_write";
     ev.process_id = static_cast<int>(pid);
     ev.virtual_address = static_cast<int>(va);
     ev.success = false;
     ev.explanation = "Write failed at VA " + to_string(va);
-    event_history_.push_back(ev);
+    record_event(std::move(ev));
     return false;
+}
+
+bool Engine::set_page_writable(ProcessId pid, VirtualAddress va, bool writable) {
+    const auto process = state_.process_page_tables.find(pid);
+    if (process == state_.process_page_tables.end()) return false;
+    const VirtualAddress16 address(va, static_cast<uint16_t>(config_.page_size));
+    auto& table = process->second;
+    if (address.page_number >= table.size()) table.resize(address.page_number + 1);
+    auto& page = table[address.page_number];
+    page.valid = true;
+    page.read_write = writable;
+    state_.mmu->invalidate_tlb_entry(pid, address.page_number);
+    Event event{};
+    event.step_number = ++state_.simulation_step;
+    event.event_type = "permission_changed";
+    event.process_id = static_cast<int>(pid);
+    event.virtual_address = va;
+    event.page_number = address.page_number;
+    event.explanation = writable ? "Page allows reads and writes" : "Page is read-only";
+    record_event(std::move(event));
+    return true;
 }
 
 bool Engine::set_allocation_policy(FitPolicy policy) {
@@ -401,6 +439,7 @@ bool Engine::set_replacement_policy(ReplacementAlgorithm algo) {
 EngineState Engine::get_state() const {
     EngineState result;
     result.config = config_;
+    result.allocation_attempts = state_.allocation_attempts;
     result.total_allocations = state_.total_allocations;
     result.total_frees = state_.total_frees;
     result.active_allocations = state_.active_allocations;
@@ -433,6 +472,7 @@ EngineSnapshot Engine::get_snapshot() const {
         snapshot.heap.stats = state_.heap->get_fragmentation_stats();
         snapshot.heap.stats.internal_fragmentation_bytes =
             snapshot.heap.stats.allocated_bytes - state_.allocated_bytes;
+        snapshot.heap.allocation_attempts = state_.allocation_attempts;
         snapshot.heap.total_allocations = state_.total_allocations;
         snapshot.heap.total_frees = state_.total_frees;
         // Count actual blocks from the heap instead of hardcoding
@@ -483,6 +523,14 @@ EngineSnapshot Engine::get_snapshot() const {
     snapshot.recent_events = vector<Event>(event_history_.begin(), event_history_.end());
 
     return snapshot;
+}
+
+void Engine::record_event(Event event) {
+    event.event_id = next_event_id_++;
+    if (event_history_.size() == max_event_history_) {
+        event_history_.erase(event_history_.begin());
+    }
+    event_history_.push_back(std::move(event));
 }
 
 const vector<Event>& Engine::get_recent_events() const {

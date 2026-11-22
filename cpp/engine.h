@@ -46,6 +46,7 @@ struct EngineState {
     std::unique_ptr<SwapManager> swap = nullptr;
     size_t next_process_id = 1;
     size_t simulation_step = 0;
+    uint64_t allocation_attempts = 0;
     uint64_t total_allocations = 0;
     uint64_t total_frees = 0;
     size_t active_allocations = 0;
@@ -76,6 +77,7 @@ struct EngineSnapshot {
         };
         FragmentationStats stats;
         std::vector<Block> blocks;
+        uint64_t allocation_attempts = 0;
         uint64_t total_allocations = 0;
         uint64_t total_frees = 0;
         size_t total_blocks = 0;
@@ -141,6 +143,7 @@ public:
 
     bool read_memory(ProcessId pid, VirtualAddress va, void* buffer, size_t size);
     bool write_memory(ProcessId pid, VirtualAddress va, const void* data, size_t size);
+    bool set_page_writable(ProcessId pid, VirtualAddress va, bool writable);
 
     bool set_allocation_policy(FitPolicy policy);
     bool set_replacement_policy(ReplacementAlgorithm algo);
@@ -162,7 +165,9 @@ private:
     std::map<size_t, HeapAllocation> heap_allocations_;
     EngineConfig config_;
     EngineState state_;
+    void record_event(Event event);
     std::vector<Event> event_history_;
+    size_t next_event_id_ = 1;
     size_t max_event_history_ = 1000;
 };
 

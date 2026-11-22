@@ -7,6 +7,13 @@
 using namespace std;
 using json = nlohmann::json;
 
+static VirtualAddress parse_virtual_address(const json& value) {
+    if (!value.is_number_integer() || value < 0 || value > UINT16_MAX) {
+        throw std::invalid_argument("Virtual address must be an integer from 0 to 65535");
+    }
+    return value.get<VirtualAddress>();
+}
+
 int main() {
     Engine engine;
     string line;
@@ -117,7 +124,7 @@ int main() {
                     throw runtime_error("Missing pid or virtual_address parameter");
                 }
                 ProcessId pid = request["params"]["pid"].get<ProcessId>();
-                VirtualAddress va = request["params"]["virtual_address"].get<VirtualAddress>();
+                VirtualAddress va = parse_virtual_address(request["params"]["virtual_address"]);
                 auto result = engine.translate_address(pid, va);
                 const auto page_size = engine.get_config().page_size;
                 const VirtualAddress16 address(va, static_cast<uint16_t>(page_size));
@@ -137,7 +144,7 @@ int main() {
                     throw runtime_error("Missing parameters");
                 }
                 ProcessId pid = request["params"]["pid"].get<ProcessId>();
-                VirtualAddress va = request["params"]["virtual_address"].get<VirtualAddress>();
+                VirtualAddress va = parse_virtual_address(request["params"]["virtual_address"]);
                 size_t size = request["params"]["size"].get<size_t>();
 
                 vector<uint8_t> buffer(size);
@@ -154,7 +161,7 @@ int main() {
                     throw runtime_error("Missing parameters");
                 }
                 ProcessId pid = request["params"]["pid"].get<ProcessId>();
-                VirtualAddress va = request["params"]["virtual_address"].get<VirtualAddress>();
+                VirtualAddress va = parse_virtual_address(request["params"]["virtual_address"]);
                 auto data_arr = request["params"]["data"];
                 vector<uint8_t> data;
                 for (auto& v : data_arr) data.push_back(static_cast<uint8_t>(v.get<int>()));
@@ -164,6 +171,14 @@ int main() {
                 if (!success) {
                     response["error"] = "Write failed";
                 }
+            }
+            else if (command == "set_page_permission") {
+                const auto& params = request.at("params");
+                const auto pid = params.at("pid").get<ProcessId>();
+                const auto va = parse_virtual_address(params.at("virtual_address"));
+                const bool writable = params.at("writable").get<bool>();
+                response["success"] = engine.set_page_writable(pid, va, writable);
+                if (!response["success"].get<bool>()) response["error"] = "Process not found";
             }
             else if (command == "set_policy") {
                 if (!request.contains("params") || !request["params"].contains("policy_type") || !request["params"].contains("policy")) {
@@ -203,6 +218,7 @@ int main() {
                     {"total_blocks", snapshot.heap.total_blocks},
                     {"free_blocks", snapshot.heap.free_blocks},
                     {"total_allocations", snapshot.heap.total_allocations},
+                    {"allocation_attempts", snapshot.heap.allocation_attempts},
                     {"total_frees", snapshot.heap.total_frees},
                     {"external_fragmentation_bytes", snapshot.heap.stats.external_fragmentation_bytes},
                     {"internal_fragmentation_bytes", snapshot.heap.stats.internal_fragmentation_bytes},
@@ -217,6 +233,7 @@ int main() {
 
                 // MMU state
                 data["mmu"] = {
+                    {"tlb_lookups", snapshot.mmu.mmu_metrics.tlb_lookups},
                     {"tlb_hits", snapshot.mmu.mmu_metrics.tlb_hits},
                     {"tlb_misses", snapshot.mmu.mmu_metrics.tlb_misses},
                     {"tlb_capacity", snapshot.mmu.tlb_capacity}
@@ -249,7 +266,7 @@ int main() {
                             {"page", vpn}, {"present", entry.present},
                             {"frame", entry.present ? json(entry.frame_number) : json(nullptr)},
                             {"swap_slot", entry.swap_slot == NO_SWAP_SLOT ? json(nullptr) : json(entry.swap_slot)},
-                            {"referenced", entry.referenced}, {"dirty", entry.dirty}
+                            {"referenced", entry.referenced}, {"dirty", entry.dirty}, {"writable", entry.read_write}
                         });
                     }
                     data["processes"].push_back({{"pid", pid}, {"pages", pages}});

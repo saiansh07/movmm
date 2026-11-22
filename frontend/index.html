@@ -58,6 +58,7 @@
             <label for="address">Virtual address</label><input id="address" name="address" value="0x0000" required spellcheck="false">
             <label for="byte">Byte to write (0–255)</label><input id="byte" name="byte" type="number" min="0" max="255" value="42" required>
             <div class="actions wrap"><button name="operation" value="translate" data-operation>Translate</button><button name="operation" value="read" class="secondary" data-operation>Read</button><button name="operation" value="write" class="secondary" data-operation>Write</button></div>
+            <div class="actions wrap" aria-label="Page permissions"><button name="operation" value="readonly" class="secondary" data-operation>Make read-only</button><button name="operation" value="writable" class="secondary" data-operation>Allow writes</button></div>
           </form>
           <output id="accessResult" class="access-result" aria-live="polite">Create a process to access memory.</output>
         </section>
@@ -99,6 +100,12 @@
           <p id="heapDetails" class="muted">&mdash;</p>
           <div id="heapMap" class="heap-map" aria-label="Heap block sizes"></div>
           <div class="scroll"><table><thead><tr><th scope="col">Heap offsets</th><th scope="col">Size</th><th scope="col">Owner</th><th scope="col">Action</th></tr></thead><tbody id="heapBlocks"></tbody></table></div>
+        </section>
+        <section id="analytics" class="panel">
+          <div class="section-head"><h2>Performance analytics</h2><button class="secondary" id="compare" type="button" data-operation>Compare FIFO and LRU</button></div>
+          <p id="liveRates" class="muted">&mdash;</p>
+          <p id="comparisonStatus" class="muted" role="status">Runs the same workload twice using two frames and resets the machine for each run.</p>
+          <div class="scroll"><table><thead><tr><th scope="col">Policy</th><th scope="col">TLB hit rate</th><th scope="col">Page faults</th><th scope="col">Replacements</th><th scope="col">Swap writes</th><th scope="col">Swap reads</th></tr></thead><tbody id="comparisonResults"></tbody></table></div>
         </section>
         <section id="history" class="panel">
           <div class="section-head"><div><p class="eyebrow">ENGINE TRACE</p><h2>Execution history</h2></div><label class="filter">Filter<select id="eventFilter"><option value="all">All events</option><option value="paging">Paging</option><option value="swap">Swap</option><option value="process">Processes</option></select></label></div>

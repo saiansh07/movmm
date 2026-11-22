@@ -193,6 +193,35 @@ int main() {
         cout << "Heap ownership and coalescing tests passed!" << endl;
     }
 
+    // Permission survives faults and prevents writes without changing memory.
+    {
+        Engine engine;
+        const auto pid = engine.create_process();
+        const uint8_t value = 42;
+        uint8_t read = 0;
+        assert(engine.set_page_writable(pid, 0, false));
+        assert(!engine.write_memory(pid, 0, &value, 1));
+        assert(engine.get_snapshot().paging.page_faults == 0);
+        assert(engine.read_memory(pid, 0, &read, 1) && read == 0);
+        assert(engine.set_page_writable(pid, 0, true));
+        assert(engine.write_memory(pid, 0, &value, 1));
+        assert(engine.set_page_writable(pid, 0, false));
+        assert(!engine.write_memory(pid, 0, &read, 1));
+        assert(engine.read_memory(pid, 0, &read, 1) && read == value);
+    }
+
+    // The snapshot keeps a bounded history while IDs stay monotonic.
+    {
+        Engine engine;
+        for (int i = 0; i < 1005; ++i) assert(!engine.allocate_memory(1, 0));
+        const auto snapshot = engine.get_snapshot();
+        assert(snapshot.recent_events.size() == 1000);
+        assert(snapshot.recent_events.front().event_id == 6);
+        assert(snapshot.recent_events.back().event_id == 1005);
+        assert(snapshot.heap.allocation_attempts == 1005);
+        assert(snapshot.heap.total_allocations == 0);
+    }
+
     cout << "--- All MoVMM-Engine Tests Passed! ---" << endl;
     return 0;
 }

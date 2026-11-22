@@ -14,14 +14,14 @@ MMU::Result MMU::translate(ProcessId pid, VirtualAddress va, const vector<PageTa
     metrics.tlb_lookups++;
     timer++;
 
-    for (auto& entry : tlb) {
-        if (entry.valid && entry.pid == pid && entry.page_number == addr.page_number) {
-            res.physical_address = (entry.frame_number * page_size) + addr.offset;
-            res.tlb_hit = true;
-            entry.last_accessed = timer;
-            metrics.tlb_hits++;
-            return res;
-        }
+    const auto cached = slots.find(key(pid, addr.page_number));
+    if (cached != slots.end()) {
+        auto& entry = tlb[cached->second];
+        res.physical_address = (entry.frame_number * page_size) + addr.offset;
+        res.tlb_hit = true;
+        entry.last_accessed = timer;
+        metrics.tlb_hits++;
+        return res;
     }
 
     metrics.tlb_misses++;
@@ -42,13 +42,13 @@ MMU::Result MMU::translate(ProcessId pid, VirtualAddress va, const vector<PageTa
 
 void MMU::update_tlb(ProcessId pid, PageNumber pn, FrameNumber fn, bool dirty) {
     if (tlb.empty()) return;
-    for (auto& entry : tlb) {
-        if (entry.valid && entry.pid == pid && entry.page_number == pn) {
-            entry.frame_number = fn;
-            entry.dirty = dirty;
-            entry.last_accessed = timer;
-            return;
-        }
+    const auto cached = slots.find(key(pid, pn));
+    if (cached != slots.end()) {
+        auto& entry = tlb[cached->second];
+        entry.frame_number = fn;
+        entry.dirty = dirty;
+        entry.last_accessed = timer;
+        return;
     }
     size_t victim_idx = 0;
     uint64_t min_time = timer + 1;
@@ -62,6 +62,10 @@ void MMU::update_tlb(ProcessId pid, PageNumber pn, FrameNumber fn, bool dirty) {
             victim_idx = i;
         }
     }
+    if (tlb[victim_idx].valid) {
+        slots.erase(key(tlb[victim_idx].pid, tlb[victim_idx].page_number));
+    }
+    slots.emplace(key(pid, pn), victim_idx);
     tlb[victim_idx].valid = true;
     tlb[victim_idx].pid = pid;
     tlb[victim_idx].page_number = pn;
@@ -72,16 +76,17 @@ void MMU::update_tlb(ProcessId pid, PageNumber pn, FrameNumber fn, bool dirty) {
 
 void MMU::invalidate_tlb(ProcessId pid) {
     for (auto& entry : tlb) {
-        if (entry.pid == pid) {
+        if (entry.valid && entry.pid == pid) {
+            slots.erase(key(pid, entry.page_number));
             entry.valid = false;
         }
     }
 }
 
 void MMU::invalidate_tlb_entry(ProcessId pid, PageNumber pn) {
-    for (auto& entry : tlb) {
-        if (entry.valid && entry.pid == pid && entry.page_number == pn) {
-            entry.valid = false;
-        }
+    const auto cached = slots.find(key(pid, pn));
+    if (cached != slots.end()) {
+        tlb[cached->second].valid = false;
+        slots.erase(cached);
     }
 }

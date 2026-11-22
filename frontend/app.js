@@ -4,6 +4,7 @@ const byId = id => document.getElementById(id);
 const text = (id, value) => { byId(id).textContent = value; };
 const hex = value => "0x" + value.toString(16).toUpperCase().padStart(4, "0");
 const dash = "—";
+const rate = (count, total) => total ? (100 * count / total).toFixed(1) + "%" : dash;
 const operations = document.querySelectorAll("[data-operation]");
 const processControl = byId("process");
 let state;
@@ -122,7 +123,7 @@ function renderPages() {
   }
   const size = state.machine.page_size;
   const entries = new Map(process.pages.map(page => [page.page, page]));
-  const status = page => page?.present ? "Resident" : page?.swap_slot != null ? "In swap" : page ? "Evicted" : "Unmapped";
+  const status = page => page?.present ? "Resident" : page?.swap_slot != null ? "In swap" : page ? "Nonresident" : "Unmapped";
   const tone = page => page?.dirty ? "dirty" : page?.present ? "occupied" : page?.swap_slot != null ? "swapped" : "unused";
   const pages = document.createDocumentFragment();
   for (let vpn = 0; vpn < 65536 / size; vpn++) {
@@ -132,7 +133,7 @@ function renderPages() {
   byId("virtualPages").replaceChildren(pages);
   table("pageTable", process.pages.map(page => [
     page.page, hex(page.page * size) + "–" + hex((page.page + 1) * size - 1), status(page), page.frame, page.swap_slot,
-    [page.referenced && "Referenced", page.dirty && "Dirty"].filter(Boolean).join(", ") || dash
+    [page.writable === false && "Read-only", page.referenced && "Referenced", page.dirty && "Dirty"].filter(Boolean).join(", ") || dash
   ]), 6, "This process has not accessed any virtual pages.");
 }
 
@@ -179,7 +180,9 @@ function render(snapshot) {
   const misses = mmu.tlb_misses;
   text("ramMetric", paging.resident_pages + " / " + machine.total_frames);
   text("ramDetail", machine.page_size + " B per frame");
-  text("tlbMetric", hits + misses ? (100 * hits / (hits + misses)).toFixed(1) + "%" : dash);
+  text("tlbMetric", rate(hits, hits + misses));
+  text("liveRates", "Page fault rate " + rate(paging.page_faults, mmu.tlb_lookups) +
+    " · Allocation success rate " + rate(heap.total_allocations, heap.allocation_attempts));
   text("tlbDetail", hits + " hits · " + misses + " misses");
   text("faultMetric", paging.page_faults);
   text("replacementDetail", paging.replacements + " replacements · " + (paging.lru_enabled ? "LRU" : "FIFO"));
@@ -371,14 +374,57 @@ byId("policy").onchange = () => perform(() => command("policies", {policy_type: 
 byId("access").onsubmit = event => {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
-  perform(() => access(event.submitter?.value ?? "translate", Number(processControl.value), parseAddress(form.get("address")), Number(form.get("byte"))));
+  perform(async () => {
+    const operation = event.submitter?.value ?? "translate";
+    const pid = Number(processControl.value);
+    const address = parseAddress(form.get("address"));
+    if (operation === "readonly" || operation === "writable") {
+      const writable = operation === "writable";
+      await post("memory/permissions", {pid, virtual_address: address, writable});
+      text("accessResult", hex(address) + (writable ? " is writable." : " is read-only."));
+      return;
+    }
+    await access(operation, pid, address, Number(form.get("byte")));
+  });
 };
 byId("heap").onsubmit = event => {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
   perform(() => command("memory/allocate", {pid: Number(processControl.value), size: Number(form.get("size"))}));
 };
+byId("compare").onclick = () => perform(async () => {
+  resetDemo();
+  const results = [];
+  table("comparisonResults", results, 6, "Running workload.");
+  try {
+    for (const algorithm of ["fifo", "lru"]) {
+      text("comparisonStatus", "Running " + algorithm.toUpperCase() + " on two frames…");
+      await post("config", {
+        page_size: 256, ram_size_bytes: 512, tlb_capacity: 4, swap_capacity_pages: 8,
+        replacement_algo: algorithm
+      });
+      const {pid} = await command("processes");
+      await access("write", pid, 0, 42);
+      await access("translate", pid, 256);
+      await access("translate", pid, 0);
+      await access("translate", pid, 512);
+      await access("read", pid, 0);
+
+      const response = await fetch("/api/v1/state", {signal: AbortSignal.timeout(10000)});
+      if (!response.ok) throw new Error("Could not read comparison metrics.");
+      const {mmu, paging, swap} = await response.json();
+      results.push([algorithm.toUpperCase(), rate(mmu.tlb_hits, mmu.tlb_lookups),
+        paging.page_faults, paging.replacements, swap.page_outs, swap.page_ins]);
+      table("comparisonResults", results, 6, "");
+    }
+    text("comparisonStatus", "Both runs completed. The memory map shows the LRU run.");
+  } catch (error) {
+    text("comparisonStatus", "Comparison interrupted.");
+    throw error;
+  }
+});
 byId("eventFilter").onchange = renderEvents;
+table("comparisonResults", [], 6, "Run the comparison to collect measurements.");
 table("pageTable", [], 6, "No page table to display.");
 table("tlbTable", [], 5, "No cached translations.");
 renderHeap();

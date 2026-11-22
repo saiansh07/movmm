@@ -85,6 +85,12 @@ This document describes the FastAPI backend implementation for MoVMM-Engine Phas
   - **Response**: `{"success": bool, "message": string}`
   - **Purpose**: Write to a single virtual page with page-fault handling
 
+### Page Permissions
+
+- **POST** `/api/v1/memory/permissions`
+  - **Request**: `{"pid": 1, "virtual_address": 0, "writable": false}`
+  - Applies to the entire virtual page. Reads can fault the page into RAM. Writes to a read-only page are rejected and recorded in execution history.
+
 ### Policy Management Endpoint
 
 - **POST** `/api/v1/policies`
@@ -185,27 +191,18 @@ The `run.ps1` script orchestrates the complete setup:
 - Dirty-page swap integrity
 - Invalid memory access
 
-### Python Tests (pytest)
-- FastAPI startup and health check
-- Every REST endpoint
-- WebSocket connections
-- Concurrent requests
-- Engine crash detection
-- Backend subprocess cleanup
-- Malformed JSON recovery
-- Request ID matching
+### HTTP and WebSocket Integration Check
 
-Run: `pytest -v` from the project root
+After building the engine and installing the backend requirements, run from the repository root:
 
-## Known Limitations
-- Frontend interface not built (will be added in Phase 5)
-- Some edge cases in page replacement algorithms
-- Swap I/O operations use placeholder data (will be enhanced with actual frame data storage)
-- The engine currently uses a simplified 4KB heap with configurable policies
+```powershell
+python cpp/tests/check_http_ws.py cpp/build/windows/engine_cli.exe
+```
 
-## Future Enhancements (Phase 5)
-- Full browser frontend interface
-- Actual frame data storage and swap read/write with integrity verification
-- Advanced page replacement statistics
-- More sophisticated memory access patterns
-- Multi-process isolation with full MMU protection simulation
+The check starts an isolated Uvicorn instance with a temporary swap file. It verifies served assets, process and heap operations, page permissions, address bounds, and FIFO/LRU measurements over HTTP and WebSockets.
+
+## Model Boundaries
+
+- The simulated heap is 4 KiB with configurable allocation policies.
+- Read and write requests must fit within a single virtual page.
+- Swap backs live pages on disk. Initialization and reset clear the previous simulation.

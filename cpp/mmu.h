@@ -28,6 +28,10 @@ private:
     size_t tlb_capacity;
     size_t page_size;
     std::vector<TLBEntry> tlb;
+    std::unordered_map<uint64_t, size_t> slots;
+    static uint64_t key(ProcessId pid, PageNumber page) {
+        return (static_cast<uint64_t>(pid) << 16) | page;
+    }
     uint64_t timer = 0;
     PerformanceMetrics metrics;
 };

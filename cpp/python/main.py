@@ -109,6 +109,12 @@ class WriteMemoryRequest(BaseModel):
     command: str = "write_memory"
     params: Dict[str, Any] = Field(..., description="pid: Process ID, virtual_address: 16-bit VA, data: Byte array")
 
+class PagePermissionRequest(BaseModel):
+    pid: int = Field(gt=0, le=4294967295)
+    virtual_address: int = Field(ge=0, le=65535)
+    writable: bool
+
+
 class SetPolicyRequest(BaseModel):
     """Request for policy setting."""
     id: str
@@ -345,6 +351,17 @@ async def write_memory(request: WriteMemoryRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/v1/memory/permissions")
+async def set_page_permission(request: PagePermissionRequest):
+    response = await run_in_threadpool(
+        app.state.engine.send_command, "set_page_permission", request.model_dump()
+    )
+    if not response.get("success"):
+        raise HTTPException(status_code=404 if response.get("error") == "Process not found" else 503,
+                            detail=response.get("error", "Could not set page permission"))
+    return {"success": True}
+
 
 @app.post("/api/v1/policies")
 async def set_policies(request: SetPolicyRequest):

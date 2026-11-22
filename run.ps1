@@ -68,9 +68,9 @@ try {
     $engine = Get-Item -LiteralPath 'engine_cli.exe' -ErrorAction SilentlyContinue
     $sources = Get-ChildItem -Path 'cpp/*.cpp','cpp/*.h'
     if (-not $engine -or ($sources | Where-Object LastWriteTime -gt $engine.LastWriteTime)) {
-        $compiler = Get-Command g++ -CommandType Application -ErrorAction SilentlyContinue
+        $compiler = Get-Command g++ -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
         $compilerPath = if ($compiler) { $compiler.Source } else { 'C:\msys64\ucrt64\bin\g++.exe' }
-        & $compilerPath -std=c++17 cpp/engine_cli.cpp cpp/engine.cpp cpp/heap_allocator.cpp cpp/mmu.cpp cpp/paging.cpp cpp/swap.cpp cpp/events.cpp -o engine_cli.exe
+        & $compilerPath -std=c++17 -static cpp/engine_cli.cpp cpp/engine.cpp cpp/heap_allocator.cpp cpp/mmu.cpp cpp/paging.cpp cpp/swap.cpp cpp/events.cpp -o engine_cli.exe
         if ($LASTEXITCODE -ne 0) { throw 'Failed to build the engine CLI.' }
     }
 
