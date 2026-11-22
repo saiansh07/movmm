@@ -1,6 +1,7 @@
 import json
 import os
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -117,6 +118,11 @@ with tempfile.TemporaryDirectory() as work, socket.socket() as listener:
                 assert cleaned["swap"]["used_slots"] == 0 and cleaned["paging"]["resident_pages"] == 0
                 assert all(slot["pid"] is None for slot in cleaned["swap"]["slots"])
                 assert cleaned["paging"]["fifo_order"] == cleaned["paging"]["lru_order"] == []
+        if "--guided" in sys.argv[2:]:
+            subprocess.run(
+                ["node", str(root / "cpp/tests/check_guided_workload.cjs"), f"http://127.0.0.1:{port}"],
+                check=True,
+            )
     finally:
         server.should_exit = True
         thread.join(timeout=10)

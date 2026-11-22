@@ -10,12 +10,16 @@ const processControl = byId("process");
 let state;
 let online = false;
 let busy = false;
-let demoIndex = 0;
-let demoPid;
+let demo;
 let configSignature;
+let editingConfig = false;
 
 function syncButtons() {
   operations.forEach(control => { control.disabled = busy || !online; });
+  if (demo && demo.next === demo.steps.length) byId("step").disabled = true;
+  for (const field of byId("configuration").querySelectorAll("input, select")) {
+    field.disabled = busy;
+  }
   for (const control of [byId("terminate"), ...byId("access").querySelectorAll("button"), byId("heap").querySelector("button")]) {
     control.disabled ||= !processControl.value;
   }
@@ -213,13 +217,14 @@ function render(snapshot) {
   ]), 4, "No swap slots configured.");
 
   const machineConfig = [machine.page_size, machine.total_frames, mmu.tlb_capacity, machine.total_swap_slots, machine.fit_policy];
-  if (machineConfig.join() !== configSignature) {
+  if (!editingConfig && machineConfig.join() !== configSignature) {
     const form = byId("configuration");
     ["page_size", "frames", "tlb_capacity", "swap_capacity_pages", "fit_policy"].forEach((field, index) => {
       form.elements[field].value = machineConfig[index];
     });
     configSignature = machineConfig.join();
   }
+  updateDemoLimits();
 
   const frameCells = document.createDocumentFragment();
   for (const frame of snapshot.frames) {
@@ -277,6 +282,12 @@ function command(route, params = {}) {
   return post(route, {id: crypto.randomUUID(), params});
 }
 
+async function readState() {
+  const response = await fetch("/api/v1/state", {signal: AbortSignal.timeout(10000)});
+  if (!response.ok) throw new Error("Could not read the machine state.");
+  return response.json();
+}
+
 async function perform(work) {
   if (busy || !online) return;
   busy = true;
@@ -318,48 +329,91 @@ async function access(operation, pid, address, byte) {
 }
 
 function resetDemo() {
-  demoIndex = 0;
-  demoPid = undefined;
-  text("demoStatus", "Starting the demo resets the machine.");
+  demo = undefined;
+  text("demoStatus", "Ready to start.");
+  updateDemoLimits();
+  syncButtons();
 }
 
-const workload = [
-  ["Write byte 42 to page 0 and mark it dirty.", () => access("write", demoPid, 0, 42)],
-  ["Load page 1 into the second frame.", () => access("translate", demoPid, 256)],
-  ["Revisit page 1 for a TLB hit.", () => access("translate", demoPid, 256)],
-  ["Load page 2, evict page 0, and write it to swap.", () => access("translate", demoPid, 512)],
-  ["Read page 0 back from swap and recover byte 42.", () => access("read", demoPid, 0)]
-];
+const usingPreset = () => byId("demoMode").value === "preset";
+
+function updateDemoLimits() {
+  const preset = usingPreset();
+  text("demoConfig", preset
+    ? "Starting this preset applies 2 frames, 256 B pages, 4 TLB entries, and 8 swap slots."
+    : "A new workload resets memory using the applied machine settings.");
+  const limits = [];
+  if (!preset && state) {
+    if (state.mmu.tlb_capacity === 0) limits.push("TLB hits are unavailable with 0 TLB entries.");
+    if (state.machine.total_swap_slots === 0) limits.push("Swap-out and swap-in are unavailable with 0 swap slots. The demo evicts a clean page.");
+  }
+  text("demoLimits", limits.join(" "));
+}
+
+function makeWorkload({machine, mmu}) {
+  const {total_frames: frames, page_size: pageSize, total_swap_slots: swapSlots} = machine;
+  const pagesPerProcess = 65536 / pageSize;
+  const steps = [];
+  const add = (operation, page, description) => steps.push({
+    operation, process: Math.floor(page / pagesPerProcess),
+    address: (page % pagesPerProcess) * pageSize, description
+  });
+
+  if (swapSlots) add("write", 0, "Write byte 42 to the first page and mark it dirty.");
+  else add("translate", 0, "Load the first page with a page fault.");
+  for (let page = 1; page < frames; page++) {
+    add("translate", page, "Load another page into a free frame.");
+  }
+  // Revisit the newest page so the first page remains the victim under FIFO and LRU.
+  if (mmu.tlb_capacity) add("translate", frames - 1, "Revisit the most recently loaded page for a TLB hit.");
+  add("translate", frames, swapSlots
+    ? "Load one more page, evict the first page, and write it to swap."
+    : "Load one more page and evict the first, clean page.");
+  if (swapSlots) add("read", 0, "Read the first page back from swap.");
+  return steps;
+}
+
+async function startDemo() {
+  if (usingPreset()) {
+    const {machine, paging} = await readState();
+    await post("config", {
+      page_size: 256, ram_size_bytes: 512, tlb_capacity: 4, swap_capacity_pages: 8,
+      fit_policy: machine.fit_policy, replacement_algo: paging.lru_enabled ? "lru" : "fifo"
+    });
+  } else await post("reset");
+  demo = {steps: makeWorkload(await readState()), next: 0, pids: []};
+}
 
 async function demoStep() {
-  if (demoIndex === 0) {
-    await post("config", {page_size: 256, ram_size_bytes: 512, tlb_capacity: 4, swap_capacity_pages: 8, fit_policy: state.machine.fit_policy, replacement_algo: byId("policy").value});
-    demoPid = (await command("processes")).pid;
-    text("demoStatus", "Created PID " + demoPid + " with two physical frames.");
-  } else {
-    const [description, operation] = workload[demoIndex - 1];
-    await operation();
-    text("demoStatus", description);
-  }
-  demoIndex++;
+  if (!demo) await startDemo();
+  if (demo.next >= demo.steps.length) return;
+  const {operation, process, address, description} = demo.steps[demo.next];
+  demo.pids[process] ??= (await command("processes")).pid;
+  await access(operation, demo.pids[process], address, 42);
+  demo.next++;
+  const progress = "Operation " + demo.next + " of " + demo.steps.length + ". " + description;
+  text("demoStatus", demo.next === demo.steps.length
+    ? progress + " Workload complete. Use Run demo or reset the engine to start again."
+    : progress);
 }
 
+byId("demoMode").onchange = resetDemo;
 byId("demo").onclick = () => perform(async () => {
   resetDemo();
-  while (demoIndex <= workload.length && online) {
+  do {
     await demoStep();
-    await new Promise(resolve => setTimeout(resolve, 650));
-  }
+    if (demo.next < demo.steps.length) {
+      await new Promise(resolve => setTimeout(resolve, usingPreset() ? 650 : 40));
+    }
+  } while (online && demo.next < demo.steps.length);
 });
-byId("step").onclick = () => perform(async () => {
-  if (demoIndex > workload.length) resetDemo();
-  await demoStep();
-});
+byId("step").onclick = () => perform(demoStep);
 byId("reset").onclick = () => perform(async () => {
   await post("reset");
   resetDemo();
   text("accessResult", "Create a process to access memory.");
 });
+byId("configuration").oninput = () => { editingConfig = true; };
 byId("configuration").onsubmit = event => {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
@@ -373,6 +427,8 @@ byId("configuration").onsubmit = event => {
       fit_policy: form.get("fit_policy"),
       replacement_algo: byId("policy").value
     });
+    editingConfig = false;
+    byId("demoMode").value = "current";
     resetDemo();
     text("accessResult", "Create a process to access memory.");
   });
@@ -420,9 +476,7 @@ byId("compare").onclick = () => perform(async () => {
       await access("translate", pid, 512);
       await access("read", pid, 0);
 
-      const response = await fetch("/api/v1/state", {signal: AbortSignal.timeout(10000)});
-      if (!response.ok) throw new Error("Could not read comparison metrics.");
-      const {mmu, paging, swap} = await response.json();
+      const {mmu, paging, swap} = await readState();
       results.push([algorithm.toUpperCase(), rate(mmu.tlb_hits, mmu.tlb_lookups),
         paging.page_faults, paging.replacements, swap.page_outs, swap.page_ins]);
       table("comparisonResults", results, 6, "");

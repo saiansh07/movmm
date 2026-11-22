@@ -32,9 +32,15 @@
         <section class="panel demo">
           <p class="eyebrow">GUIDED WORKLOAD</p>
           <h2>Run a paging demo</h2>
-          <p>Use two RAM frames to reveal TLB hits, page eviction, and dirty-page writeback.</p>
+          <label for="demoMode">Workload configuration</label>
+          <select id="demoMode" data-operation>
+            <option value="current">Current applied configuration</option>
+            <option value="preset">Two-frame paging preset</option>
+          </select>
+          <p id="demoConfig" class="muted">A new workload resets memory using the applied machine settings.</p>
+          <p id="demoLimits" class="muted"></p>
           <div class="actions"><button id="demo" type="button" data-operation>Run demo</button><button id="step" type="button" class="secondary" data-operation>Step</button></div>
-          <p id="demoStatus" class="muted" role="status">Starting the demo resets the machine.</p>
+          <p id="demoStatus" class="muted" role="status">Ready to start.</p>
         </section>
         <section class="panel">
           <h2>Machine configuration</h2>

@@ -14,7 +14,7 @@ Open [the dashboard](http://127.0.0.1:8000/). The launcher installs Python depen
 
 ## Try the simulator
 
-- Select **Run demo** or **Step** to trace a TLB hit, a page fault, dirty-page eviction, and recovery from disk.
+- Select **Run demo** to run the guided workload or **Step** to execute one memory access at a time. Both use the applied machine settings by default. Choose **Two-frame paging preset** to load the original demonstration. The workload panel lists events that the selected settings cannot produce.
 - Inspect the physical and virtual memory maps, page tables, FIFO/LRU eviction order, and the PID and page backing each swap slot.
 - Select **Compare FIFO and LRU** to run the same workload under both policies. Each run resets the simulated machine.
 - Create a process to allocate and free heap blocks, or mark a page read-only and observe a rejected write in Execution History.

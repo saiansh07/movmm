@@ -16,7 +16,7 @@ powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\run.ps1
 
 The launcher creates or reuses the Python environment, installs backend dependencies, builds the C++ engine when needed, and starts FastAPI. Open `http://127.0.0.1:8000`. Stop an existing launcher with Ctrl+C before restarting it with code changes.
 
-- **Run demo** or **Step** demonstrates TLB hits, page faults, dirty writeback, and restoration from swap.
+- Apply your machine settings, then select **Run demo** or use **Step** to execute one memory access per click. The optional **Two-frame paging preset** loads its own RAM, page size, TLB, and swap settings when the workload starts.
 - **Compare FIFO and LRU** runs the same reference sequence under both policies. It resets the machine twice and leaves the LRU run visible.
 - **Make read-only** applies to the page containing the entered virtual address. The execution history records a protection fault if you then try to write to it.
 - API documentation is available at `http://127.0.0.1:8000/docs`.
