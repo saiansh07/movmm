@@ -13,6 +13,8 @@
 #include <cstdint>
 #include <unordered_map>
 
+using namespace std;
+
 struct EngineConfig {
     size_t ram_size_bytes = 4096;
     size_t page_size = 256;
