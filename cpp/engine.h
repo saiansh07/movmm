@@ -96,9 +96,17 @@ struct EngineSnapshot {
         size_t replacements = 0;
         bool fifo_enabled = false;
         bool lru_enabled = false;
+        std::vector<FrameNumber> fifo_order;
+        std::vector<FrameNumber> lru_order;
     } paging;
 
     struct SnapshotSwap {
+        struct Slot {
+            ProcessId pid = 0;
+            PageNumber page = 0;
+            bool resident = false;
+        };
+        std::vector<Slot> slots;
         size_t total_swap_slots = 0;
         size_t used_swap_slots = 0;
         size_t page_outs = 0;

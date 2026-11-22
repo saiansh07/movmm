@@ -27,18 +27,13 @@ bool Engine::initialize(const EngineConfig& config) {
     state_.swap.reset();
     state_.process_page_tables.clear();
     config_ = config;
-
-    // 1. Initialize Swap Manager first (dependencies for paging)
     state_.swap = make_unique<SwapManager>("swap.bin", config_.swap_capacity_pages, config_.page_size);
 
-    // 2. Initialize Heap Allocator
     state_.heap = make_unique<HeapAllocator>(4096, config_.fit_policy);
     heap_allocations_.clear();
 
-    // 3. Initialize MMU with TLB
     state_.mmu = make_unique<MMU>(config_.tlb_capacity, config_.page_size);
 
-    // 4. Initialize Paging Manager
     size_t ram_pages = config_.ram_size_bytes / config_.page_size;
     state_.paging = make_unique<PagingManager>(ram_pages, config_.replacement_algo, *state_.swap, config_.page_size);
 
@@ -52,15 +47,6 @@ bool Engine::initialize(const EngineConfig& config) {
 
     event_history_.clear();
     next_event_id_ = 1;
-
-    // Redirect diagnostic output to stderr
-    cerr << "Engine initialized:" << endl;
-    cerr << "  RAM: " << config_.ram_size_bytes << " bytes (" << ram_pages << " pages)" << endl;
-    cerr << "  Page size: " << config_.page_size << " bytes" << endl;
-    cerr << "  TLB entries: " << config_.tlb_capacity << endl;
-    cerr << "  Swap capacity: " << config_.swap_capacity_pages << " pages" << endl;
-    cerr << "  Allocation policy: " << (config_.fit_policy == FitPolicy::FIRST_FIT ? "First-Fit" : "Best-Fit") << endl;
-    cerr << "  Replacement policy: " << (config_.replacement_algo == ReplacementAlgorithm::FIFO ? "FIFO" : "LRU") << endl;
 
     return true;
 }
@@ -76,7 +62,6 @@ void Engine::reset() {
 ProcessId Engine::create_process() {
     ProcessId pid = state_.next_process_id++;
 
-    // Initialize this process's page table
     state_.process_page_tables[pid] = vector<PageTableEntry>();
 
     state_.simulation_step++;
@@ -105,7 +90,6 @@ bool Engine::terminate_process(ProcessId pid) {
         return false;
     }
 
-    // Validate process exists
     if (state_.process_page_tables.find(pid) == state_.process_page_tables.end()) {
         Event ev;
 
@@ -156,7 +140,6 @@ bool Engine::allocate_memory(ProcessId pid, size_t size) {
         return false;
     }
 
-    // Validate process exists
     if (state_.process_page_tables.find(pid) == state_.process_page_tables.end()) {
         Event ev;
 
@@ -228,7 +211,6 @@ bool Engine::free_heap_offset(ProcessId pid, size_t offset) {
 Engine::TranslationResult Engine::translate_address(ProcessId pid, VirtualAddress va) {
     TranslationResult result = {0, false, false, false};
 
-    // Validate process exists
     auto it = state_.process_page_tables.find(pid);
     if (it == state_.process_page_tables.end()) {
         result.page_fault = true;
@@ -250,7 +232,6 @@ Engine::TranslationResult Engine::translate_address(ProcessId pid, VirtualAddres
 
     state_.simulation_step++;
 
-    // Get the process's page table
     auto& page_table = it->second;
 
     VirtualAddress16 addr(va, static_cast<uint16_t>(config_.page_size));
@@ -503,6 +484,8 @@ EngineSnapshot Engine::get_snapshot() const {
         snapshot.paging.page_faults = state_.paging->get_metrics().page_faults;
         snapshot.paging.fifo_enabled = config_.replacement_algo == ReplacementAlgorithm::FIFO;
         snapshot.paging.lru_enabled = config_.replacement_algo == ReplacementAlgorithm::LRU;
+        snapshot.paging.fifo_order = state_.paging->eviction_order(ReplacementAlgorithm::FIFO);
+        snapshot.paging.lru_order = state_.paging->eviction_order(ReplacementAlgorithm::LRU);
     }
 
     // Swap state
@@ -511,6 +494,15 @@ EngineSnapshot Engine::get_snapshot() const {
         snapshot.swap.used_swap_slots = state_.swap->get_used_slots();
         snapshot.swap.page_outs = state_.swap->get_page_outs();
         snapshot.swap.page_ins = state_.swap->get_page_ins();
+        snapshot.swap.slots.resize(snapshot.swap.total_swap_slots);
+        for (const auto& [pid, table] : state_.process_page_tables) {
+            for (size_t page = 0; page < table.size(); ++page) {
+                const auto& entry = table[page];
+                if (entry.swap_slot != NO_SWAP_SLOT) {
+                    snapshot.swap.slots.at(entry.swap_slot) = {pid, static_cast<PageNumber>(page), entry.present};
+                }
+            }
+        }
     }
 
     snapshot.process_page_tables = state_.process_page_tables;

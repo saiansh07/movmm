@@ -201,6 +201,16 @@ function render(snapshot) {
   text("tlbSummary", mmu.entries.length + " / " + mmu.tlb_capacity + " cached");
   byId("policy").value = paging.lru_enabled ? "lru" : "fifo";
   text("policyDescription", paging.lru_enabled ? "Evicts the least recently accessed page." : "Evicts the page that entered RAM first.");
+  const describeFrame = number => {
+    const frame = snapshot.frames[number];
+    return frame ? "F" + number + " / P" + frame.pid + " / V" + frame.page : dash;
+  };
+  table("evictionOrder", (paging.fifo_order ?? []).map((frame, rank) => [
+    rank + 1, describeFrame(frame), describeFrame(paging.lru_order[rank])
+  ]), 3, "No resident frames.");
+  table("swapSlotsTable", (swap.slots ?? []).map(slot => [
+    slot.slot, slot.pid, slot.page, slot.pid == null ? "Free" : slot.resident ? "RAM + swap" : "In swap"
+  ]), 4, "No swap slots configured.");
 
   const machineConfig = [machine.page_size, machine.total_frames, mmu.tlb_capacity, machine.total_swap_slots, machine.fit_policy];
   if (machineConfig.join() !== configSignature) {

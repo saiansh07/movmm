@@ -32,10 +32,12 @@ public:
     std::vector<PhysicalFrame>& get_frames() { return frames; }
     const std::vector<PhysicalFrame>& get_frames() const { return frames; }
     PerformanceMetrics get_metrics() const { return metrics; }
+    std::vector<FrameNumber> eviction_order(ReplacementAlgorithm algorithm) const;
 
 private:
     FrameNumber allocate_frame(ProcessId pid, PageNumber page_num, PageFaultInfo& fault, std::vector<PageTableEntry>& page_table, PageTables* tables);
-    FrameNumber select_victim();
+    FrameNumber select_victim() const;
+    bool used_before(FrameNumber left, FrameNumber right) const;
 
     size_t total_frames;
     ReplacementAlgorithm algo;

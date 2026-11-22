@@ -14,6 +14,6 @@ The native MinGW-w64 CMake build and CTest suite cover the engine subsystems and
 
 ## Scope and remaining verification
 
-- The tracking-overhead target in PROJECT_CONTEXT.md has no measured result. Engine metadata overhead depends on the simulated RAM size and workload.
+- A Windows MinGW-w64 lower-bound measurement with 16 resident frames, one process, 4 TLB entries, and 64 swap slots counted 1,128 bytes of tracking data. That was 27.54% of RAM with 256-byte pages and 1.72% with 4 KiB pages. It counts frame records, page-table entries, TLB entries, FIFO frame indices, and the swap bitmap. Container nodes, spare capacity, allocator bookkeeping, event history, and transient snapshots are outside the measurement, so the 4 KiB result cannot establish compliance with the 10% target.
 - Swap is disk-backed during a simulation. Initialization and reset recreate the swap file. The dashboard does not restore a previous simulation after a restart.
-- The dashboard uses HTML, vanilla JavaScript, and plain CSS. Browser visual verification remains separate from the HTTP and WebSocket checks.
+- The dashboard uses HTML, vanilla JavaScript, and plain CSS. The eviction order, swap-slot ownership, policy comparison, and write rejection were visually verified in Edge against the native engine and FastAPI.

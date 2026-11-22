@@ -1,4 +1,5 @@
 #include "paging.h"
+#include <algorithm>
 #include <stdexcept>
 
 using namespace std;
@@ -89,18 +90,27 @@ FrameNumber PagingManager::allocate_frame(ProcessId pid, PageNumber page_num, Pa
     return fn;
 }
 
-FrameNumber PagingManager::select_victim() {
-    if (algo == ReplacementAlgorithm::FIFO) return fifo_queue.front();
+bool PagingManager::used_before(FrameNumber left, FrameNumber right) const {
+    const auto left_use = frames[left].last_used;
+    const auto right_use = frames[right].last_used;
+    return left_use < right_use || (left_use == right_use && left < right);
+}
 
-    FrameNumber victim = 0;
-    uint64_t oldest = timer + 1;
-    for (size_t i = 0; i < frames.size(); ++i) {
-        if (frames[i].resident && frames[i].last_used < oldest) {
-            oldest = frames[i].last_used;
-            victim = static_cast<FrameNumber>(i);
-        }
+std::vector<FrameNumber> PagingManager::eviction_order(ReplacementAlgorithm algorithm) const {
+    std::vector<FrameNumber> order(fifo_queue.begin(), fifo_queue.end());
+    if (algorithm == ReplacementAlgorithm::LRU) {
+        std::sort(order.begin(), order.end(), [this](FrameNumber left, FrameNumber right) {
+            return used_before(left, right);
+        });
     }
-    return victim;
+    return order;
+}
+
+FrameNumber PagingManager::select_victim() const {
+    if (algo == ReplacementAlgorithm::FIFO) return fifo_queue.front();
+    return *std::min_element(fifo_queue.begin(), fifo_queue.end(), [this](FrameNumber left, FrameNumber right) {
+        return used_before(left, right);
+    });
 }
 
 void PagingManager::access_page(FrameNumber frame_num, bool is_write) {

@@ -245,15 +245,27 @@ int main() {
                     {"resident_pages", snapshot.paging.resident_pages},
                     {"replacements", snapshot.paging.replacements},
                     {"fifo_enabled", snapshot.paging.fifo_enabled},
-                    {"lru_enabled", snapshot.paging.lru_enabled}
+                    {"lru_enabled", snapshot.paging.lru_enabled},
+                    {"fifo_order", snapshot.paging.fifo_order},
+                    {"lru_order", snapshot.paging.lru_order}
                 };
 
                 // Swap state
                 data["swap"] = {
                     {"page_outs", snapshot.swap.page_outs},
                     {"page_ins", snapshot.swap.page_ins},
-                    {"used_slots", snapshot.swap.used_swap_slots}
+                    {"used_slots", snapshot.swap.used_swap_slots},
+                    {"slots", json::array()}
                 };
+                for (size_t index = 0; index < snapshot.swap.slots.size(); ++index) {
+                    const auto& slot = snapshot.swap.slots[index];
+                    data["swap"]["slots"].push_back({
+                        {"slot", index},
+                        {"pid", slot.pid ? json(slot.pid) : json(nullptr)},
+                        {"page", slot.pid ? json(slot.page) : json(nullptr)},
+                        {"resident", slot.resident}
+                    });
+                }
 
                 data["machine"]["fit_policy"] = snapshot.machine.config.fit_policy == FitPolicy::BEST_FIT ? "best_fit" : "first_fit";
                 data["processes"] = json::array();

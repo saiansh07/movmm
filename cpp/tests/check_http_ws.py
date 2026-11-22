@@ -84,12 +84,21 @@ with tempfile.TemporaryDirectory() as work, socket.socket() as listener:
                 assert command("memory/write", pid=pid, virtual_address=0, data=[42])["success"]
                 assert command("memory/translate", pid=pid, virtual_address=256)["page_fault"]
                 assert command("memory/translate", pid=pid, virtual_address=0)["tlb_hit"]
+                order = receive(ws, lambda state: state["mmu"]["tlb_hits"] == 1)
+                assert order["paging"]["fifo_order"] == [0, 1]
+                assert order["paging"]["lru_order"] == [1, 0]
                 assert command("memory/translate", pid=pid, virtual_address=512)["page_fault"]
                 state = receive(ws, lambda state: state["paging"]["replacements"] == 1)
                 page = state["processes"][0]["pages"][0]
                 assert page["present"] == (algorithm == "lru")
                 assert page["swap_slot"] == (None if algorithm == "lru" else 0)
                 assert state["swap"]["page_outs"] == (0 if algorithm == "lru" else 1)
+                slots = state["swap"]["slots"]
+                assert len(slots) == 8
+                expected_pid = None if algorithm == "lru" else pid
+                assert slots[0] == {"slot": 0, "pid": expected_pid,
+                                    "page": None if expected_pid is None else 0, "resident": False}
+                assert all(slot["pid"] is None for slot in slots[1:])
                 assert command("memory/read", pid=pid, virtual_address=0, size=1)["bytes"] == [42]
                 final = receive(ws, lambda state: state["events"][-1]["event_type"] == "memory_read")
                 faults = 3 if algorithm == "lru" else 4
@@ -99,11 +108,15 @@ with tempfile.TemporaryDirectory() as work, socket.socket() as listener:
                 assert final["mmu"]["tlb_lookups"] == 5
                 assert final["mmu"]["tlb_hits"] == 5 - faults
                 assert final["swap"]["page_ins"] == (0 if algorithm == "lru" else 1)
+                assert final["swap"]["slots"][0]["resident"] == (algorithm == "fifo")
                 rest = json.loads(request("/api/v1/state"))
                 assert rest["frames"] == final["frames"]
+                assert rest["paging"] == final["paging"] and rest["swap"] == final["swap"]
                 request(f"/api/v1/processes/{pid}", {})
                 cleaned = receive(ws, lambda state: not state["processes"])
                 assert cleaned["swap"]["used_slots"] == 0 and cleaned["paging"]["resident_pages"] == 0
+                assert all(slot["pid"] is None for slot in cleaned["swap"]["slots"])
+                assert cleaned["paging"]["fifo_order"] == cleaned["paging"]["lru_order"] == []
     finally:
         server.should_exit = True
         thread.join(timeout=10)

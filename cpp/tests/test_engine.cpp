@@ -193,6 +193,29 @@ int main() {
         cout << "Heap ownership and coalescing tests passed!" << endl;
     }
 
+    // Slot ownership is machine-wide and includes resident pages with backing storage.
+    {
+        EngineConfig config;
+        config.ram_size_bytes = 256;
+        config.swap_capacity_pages = 2;
+        Engine engine(config);
+        const auto first = engine.create_process();
+        const auto second = engine.create_process();
+        const uint8_t value = 42;
+        assert(engine.write_memory(first, 0, &value, 1));
+        assert(engine.write_memory(second, 256, &value, 1));
+        assert(engine.translate_address(first, 0).page_fault);
+        auto snapshot = engine.get_snapshot();
+        assert(snapshot.swap.slots[0].pid == first && snapshot.swap.slots[0].page == 0);
+        assert(snapshot.swap.slots[0].resident);
+        assert(snapshot.swap.slots[1].pid == second && snapshot.swap.slots[1].page == 1);
+        assert(!snapshot.swap.slots[1].resident);
+        assert(snapshot.paging.fifo_order == vector<FrameNumber>{0});
+        assert(snapshot.paging.lru_order == snapshot.paging.fifo_order);
+        assert(engine.terminate_process(second));
+        assert(engine.get_snapshot().swap.slots[1].pid == 0);
+    }
+
     // Permission survives faults and prevents writes without changing memory.
     {
         Engine engine;

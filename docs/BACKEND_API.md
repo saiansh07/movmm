@@ -103,6 +103,8 @@ This document describes the FastAPI backend implementation for MoVMM-Engine Phas
 - **GET** `/api/v1/state`
   - **Response**: Engine state snapshot with machine, heap, MMU and valid TLB entries, paging, swap, physical frames, process page tables, and recent events
   - **Purpose**: Get complete engine state
+  - `paging.fifo_order` and `paging.lru_order` list resident frame numbers in eviction order, with the next victim first when RAM is full.
+  - `swap.slots` lists every machine-wide slot by index. Free slots have null `pid` and `page`. An occupied slot may still back a resident page, indicated by `resident: true`.
 
 - **GET** `/api/v1/statistics`
   - **Response**: `{"total_allocations": int, "total_frees": int, "active_allocations": int, "tlb_hit_rate": float, "page_faults": int}`

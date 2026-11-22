@@ -87,11 +87,16 @@
             <h2>Page replacement</h2>
             <label for="policy">Algorithm</label><select id="policy" data-operation><option value="fifo">FIFO</option><option value="lru">LRU</option></select>
             <p id="policyDescription" class="muted">Waiting for engine state.</p>
+            <h3>Eviction order</h3>
+            <p class="muted">Next victim first, when RAM is full.</p>
+            <div class="scroll"><table><thead><tr><th scope="col">Rank</th><th scope="col">FIFO</th><th scope="col">LRU</th></tr></thead><tbody id="evictionOrder"></tbody></table></div>
           </section>
           <section class="panel">
             <h2>Swap space</h2>
             <p id="swapSlots" class="muted">&mdash;</p><progress id="swapProgress" max="1" value="0" aria-label="Swap slots in use"></progress>
             <p id="swapIO" class="muted">&mdash;</p>
+            <h3>Machine-wide swap slots</h3>
+            <div class="scroll"><table><thead><tr><th scope="col">Slot</th><th scope="col">PID</th><th scope="col">Page</th><th scope="col">State</th></tr></thead><tbody id="swapSlotsTable"></tbody></table></div>
           </section>
         </div>
         <section class="panel">
